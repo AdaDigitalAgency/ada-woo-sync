@@ -99,11 +99,11 @@ func PostProcess(stagePath, liveDomain, stageDomain string) error {
 	commands := [][]string{
 		{"wp", "search-replace",
 			"https://" + liveDomain, "https://" + stageDomain,
-			"--all-tables", "--path=" + stagePath},
+			"--all-tables", "--allow-root", "--path=" + stagePath},
 		{"wp", "elementor", "replace-urls",
 			"https://" + liveDomain, "https://" + stageDomain,
-			"--path=" + stagePath},
-		{"wp", "cache", "flush", "--path=" + stagePath},
+			"--allow-root", "--path=" + stagePath},
+		{"wp", "cache", "flush", "--allow-root", "--path=" + stagePath},
 	}
 
 	for _, args := range commands {

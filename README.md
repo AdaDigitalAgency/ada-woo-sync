@@ -99,9 +99,9 @@ Ownership is detected from the staging webroot and applied via `chown -R`. Falls
 ### Post-processing (Step 3)
 
 ```bash
-wp search-replace https://{domain} https://stage.{domain} --all-tables
-wp elementor replace-urls https://{domain} https://stage.{domain}
-wp cache flush
+wp search-replace https://{domain} https://stage.{domain} --all-tables --allow-root
+wp elementor replace-urls https://{domain} https://stage.{domain} --allow-root
+wp cache flush --allow-root
 ```
 
 ## Safety
