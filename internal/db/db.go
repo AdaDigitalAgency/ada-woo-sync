@@ -25,12 +25,28 @@ func Connect(liveWP, stageWP *wpconfig.WPConfig) (*sql.DB, *sql.DB, error) {
 }
 
 func connect(wp *wpconfig.WPConfig) (*sql.DB, error) {
-	// Try root via socket
 	socketPaths := []string{
 		"/var/run/mysqld/mysqld.sock",
 		"/var/lib/mysql/mysql.sock",
 		"/tmp/mysql.sock",
 	}
+
+	// Try wp-config credentials via unix socket first (matches how WP itself connects)
+	for _, sock := range socketPaths {
+		dsn := fmt.Sprintf("%s:%s@unix(%s)/%s?multiStatements=true",
+			wp.DBUser, wp.DBPassword, sock, wp.DBName)
+		db, err := sql.Open("mysql", dsn)
+		if err != nil {
+			continue
+		}
+		if err := db.Ping(); err != nil {
+			db.Close()
+			continue
+		}
+		return db, nil
+	}
+
+	// Try root via socket (passwordless)
 	for _, sock := range socketPaths {
 		dsn := fmt.Sprintf("root@unix(%s)/%s?multiStatements=true", sock, wp.DBName)
 		db, err := sql.Open("mysql", dsn)
@@ -44,9 +60,13 @@ func connect(wp *wpconfig.WPConfig) (*sql.DB, error) {
 		return db, nil
 	}
 
-	// Fall back to wp-config credentials
+	// Fall back to TCP — force IPv4 when host is "localhost" to avoid ::1 issues
+	host := wp.DBHost
+	if host == "localhost" {
+		host = "127.0.0.1"
+	}
 	dsn := fmt.Sprintf("%s:%s@tcp(%s)/%s?multiStatements=true",
-		wp.DBUser, wp.DBPassword, wp.DBHost, wp.DBName)
+		wp.DBUser, wp.DBPassword, host, wp.DBName)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening connection: %w", err)
