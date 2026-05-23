@@ -57,6 +57,20 @@ wp-sync -u
 
 Skips the TUI, reads saved config, and runs the sync immediately. Useful for cron jobs or scripts.
 
+### Version check
+
+```bash
+wp-sync --version
+```
+
+### Self-update
+
+```bash
+wp-sync --update
+```
+
+Downloads the latest release from GitHub and replaces the binary in-place.
+
 ## How it works
 
 ### Database export (Step 0)

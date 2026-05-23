@@ -10,15 +10,35 @@ import (
 	"github.com/AdaDigitalAgency/ada-woo-sync/internal/discovery"
 	"github.com/AdaDigitalAgency/ada-woo-sync/internal/export"
 	"github.com/AdaDigitalAgency/ada-woo-sync/internal/guardrail"
+	"github.com/AdaDigitalAgency/ada-woo-sync/internal/selfupdate"
 	"github.com/AdaDigitalAgency/ada-woo-sync/internal/sync"
 	"github.com/AdaDigitalAgency/ada-woo-sync/internal/tui"
 	"github.com/AdaDigitalAgency/ada-woo-sync/internal/wpconfig"
 )
 
+// Set via -ldflags at build time
+var version = "dev"
+
 func main() {
 	unattended := flag.Bool("u", false, "Run in unattended mode using saved config")
 	flag.BoolVar(unattended, "unattended", false, "Run in unattended mode using saved config")
+	showVersion := flag.Bool("version", false, "Print version and exit")
+	flag.BoolVar(showVersion, "v", false, "Print version and exit")
+	doUpdate := flag.Bool("update", false, "Update to the latest version")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("wp-sync %s\n", version)
+		return
+	}
+
+	if *doUpdate {
+		if err := selfupdate.Update(version); err != nil {
+			fmt.Fprintf(os.Stderr, "Update failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if *unattended {
 		if err := runUnattended(); err != nil {
