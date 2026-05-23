@@ -139,3 +139,51 @@ func ExtractDomain(webroot string) string {
 	webroot = strings.TrimRight(webroot, "/")
 	return filepath.Base(webroot)
 }
+
+// SitePair is an auto-detected live+stage pair.
+type SitePair struct {
+	LivePath  string
+	StagePath string
+	Domain    string // base domain without "stage." prefix
+}
+
+// PairSites groups discovered paths into live/stage pairs.
+// Convention: "stage.example.com" is the staging counterpart of "example.com".
+func PairSites(paths []string) []SitePair {
+	byDomain := make(map[string]string) // domain → path
+	for _, p := range paths {
+		d := ExtractDomain(p)
+		byDomain[d] = p
+	}
+
+	seen := make(map[string]bool)
+	var pairs []SitePair
+
+	for domain, path := range byDomain {
+		if strings.HasPrefix(domain, "stage.") {
+			continue // handled from the live side
+		}
+		stageDomain := "stage." + domain
+		if stagePath, ok := byDomain[stageDomain]; ok {
+			pairs = append(pairs, SitePair{
+				LivePath:  path,
+				StagePath: stagePath,
+				Domain:    domain,
+			})
+			seen[domain] = true
+			seen[stageDomain] = true
+		}
+	}
+
+	// Include unpaired paths as live-only entries
+	for domain, path := range byDomain {
+		if !seen[domain] {
+			pairs = append(pairs, SitePair{
+				LivePath: path,
+				Domain:   domain,
+			})
+		}
+	}
+
+	return pairs
+}

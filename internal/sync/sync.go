@@ -31,7 +31,7 @@ func Import(stageDB *sql.DB, exp *export.Result) error {
 
 	// Execute in order: schema-only, base, users, orders
 	groups := []struct {
-		name string
+		name  string
 		stmts []string
 	}{
 		{"schema-only", exp.SchemaOnly},
@@ -68,6 +68,7 @@ func FileSync(livePath, stagePath string) error {
 		"--exclude=ewww",
 		"--exclude=critical-css",
 		"--exclude=litespeed",
+		"--exclude=updraft",
 		src, dst,
 	)
 	cmd.Stdout = os.Stdout

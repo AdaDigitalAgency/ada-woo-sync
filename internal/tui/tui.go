@@ -31,11 +31,20 @@ const (
 	stepDone
 )
 
+type pathMode int
+
+const (
+	pathModePairs  pathMode = iota // selecting from auto-detected pairs
+	pathModeManual                 // typing paths manually
+)
+
 type model struct {
 	step       step
 	cfg        *config.Config
 	savedCfg   *config.Config // non-nil if config file exists
 	discovered []string
+	sitePairs  []discovery.SitePair
+	pathMode   pathMode
 	liveWP     *wpconfig.WPConfig
 	stageWP    *wpconfig.WPConfig
 	allTables  []string
@@ -68,9 +77,11 @@ func Run() error {
 func initialModel() model {
 	saved, _ := config.Load()
 	discovered := discovery.Scan()
+	pairs := discovery.PairSites(discovered)
 
 	m := model{
 		discovered: discovered,
+		sitePairs:  pairs,
 		savedCfg:   saved,
 		cfg: &config.Config{
 			OrderCount:      100,
@@ -152,19 +163,48 @@ func (m model) View() string {
 		}
 
 	case stepPaths:
-		b.WriteString(promptStyle.Render("Select paths:") + "\n\n")
-		if m.cursor == 0 {
-			b.WriteString(selectedStyle.Render("▸ Live Webroot: ") + m.input + "█\n")
-			b.WriteString("  Stage Webroot: " + m.cfg.StagePath + "\n")
-		} else {
-			b.WriteString("  Live Webroot: " + m.cfg.LivePath + "\n")
-			b.WriteString(selectedStyle.Render("▸ Stage Webroot: ") + m.input + "█\n")
-		}
-		if len(m.discovered) > 0 {
-			b.WriteString("\n" + dimStyle.Render("Discovered:") + "\n")
-			for _, d := range m.discovered {
-				b.WriteString(dimStyle.Render("  " + d) + "\n")
+		if m.pathMode == pathModePairs && len(m.sitePairs) > 0 {
+			b.WriteString(promptStyle.Render("Select a site to sync:") + "\n\n")
+			for i, pair := range m.sitePairs {
+				marker := "  "
+				if i == m.cursor {
+					marker = selectedStyle.Render("▸ ")
+				}
+				if pair.StagePath != "" {
+					label := fmt.Sprintf("%s  →  %s", pair.Domain, "stage."+pair.Domain)
+					if i == m.cursor {
+						b.WriteString(marker + selectedStyle.Render(label) + "\n")
+					} else {
+						b.WriteString(marker + label + "\n")
+					}
+				} else {
+					label := pair.Domain + dimStyle.Render("  (no staging found)")
+					if i == m.cursor {
+						b.WriteString(marker + selectedStyle.Render(pair.Domain) + dimStyle.Render("  (no staging found)") + "\n")
+					} else {
+						b.WriteString(marker + label + "\n")
+					}
+				}
 			}
+			// Custom paths option
+			marker := "  "
+			if m.cursor == len(m.sitePairs) {
+				marker = selectedStyle.Render("▸ ")
+				b.WriteString(marker + selectedStyle.Render("Custom paths...") + "\n")
+			} else {
+				b.WriteString(marker + dimStyle.Render("Custom paths...") + "\n")
+			}
+		} else {
+			// Manual input mode
+			b.WriteString(promptStyle.Render("Enter paths:") + "\n\n")
+			if m.cursor == 0 {
+				b.WriteString(selectedStyle.Render("▸ Live Webroot: ") + m.input + "█\n")
+				b.WriteString("  Stage Webroot: " + m.cfg.StagePath + "\n")
+			} else {
+				b.WriteString("  Live Webroot: " + m.cfg.LivePath + "\n")
+				b.WriteString(selectedStyle.Render("▸ Stage Webroot: ") + m.input + "█\n")
+			}
+			b.WriteString("\n" + dimStyle.Render("Esc to go back to site list"))
 		}
 
 	case stepCredentials:
@@ -291,9 +331,64 @@ func (m model) updateStartup(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updatePaths(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.pathMode == pathModePairs && len(m.sitePairs) > 0 {
+		return m.updatePathsPairs(msg)
+	}
+	return m.updatePathsManual(msg)
+}
+
+func (m model) updatePathsPairs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	maxIdx := len(m.sitePairs) // includes "Custom paths" option
 	switch msg.Type {
+	case tea.KeyUp:
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case tea.KeyDown:
+		if m.cursor < maxIdx {
+			m.cursor++
+		}
+	case tea.KeyEnter:
+		if m.cursor == len(m.sitePairs) {
+			// Custom paths
+			m.pathMode = pathModeManual
+			m.cursor = 0
+			m.input = ""
+			return m, nil
+		}
+		pair := m.sitePairs[m.cursor]
+		if pair.StagePath == "" {
+			m.err = fmt.Errorf("no staging site found for %s — use Custom paths", pair.Domain)
+			return m, nil
+		}
+		m.cfg.LivePath = pair.LivePath
+		m.cfg.StagePath = pair.StagePath
+		var err error
+		m.liveWP, err = wpconfig.Parse(m.cfg.LivePath + "/wp-config.php")
+		if err != nil {
+			m.err = fmt.Errorf("live wp-config: %w", err)
+			return m, nil
+		}
+		m.stageWP, err = wpconfig.Parse(m.cfg.StagePath + "/wp-config.php")
+		if err != nil {
+			m.err = fmt.Errorf("stage wp-config: %w", err)
+			return m, nil
+		}
+		m.step = stepCredentials
+		m.cursor = 0
+	}
+	return m, nil
+}
+
+func (m model) updatePathsManual(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		if len(m.sitePairs) > 0 {
+			m.pathMode = pathModePairs
+			m.cursor = 0
+			m.input = ""
+		}
 	case tea.KeyTab:
-		// Switch between live and stage input
 		if m.cursor == 0 {
 			m.cfg.LivePath = m.input
 			m.cursor = 1
@@ -310,7 +405,6 @@ func (m model) updatePaths(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input = m.cfg.StagePath
 		} else {
 			m.cfg.StagePath = m.input
-			// Validate and parse
 			var err error
 			m.liveWP, err = wpconfig.Parse(m.cfg.LivePath + "/wp-config.php")
 			if err != nil {

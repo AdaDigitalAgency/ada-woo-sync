@@ -90,6 +90,7 @@ Drops all staging tables, imports with `FOREIGN_KEY_CHECKS=0`.
 ```
 rsync -av --delete --exclude='cache' --exclude='ewww' \
   --exclude='critical-css' --exclude='litespeed' \
+  --exclude='updraft' \
   /home/{domain}/wp-content/ /home/stage.{domain}/wp-content/
 ```
 
