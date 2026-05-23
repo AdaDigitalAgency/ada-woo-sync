@@ -17,6 +17,11 @@ func Import(stageDB *sql.DB, exp *export.Result) error {
 	if _, err := stageDB.Exec("SET FOREIGN_KEY_CHECKS=0"); err != nil {
 		return fmt.Errorf("disabling FK checks: %w", err)
 	}
+	// Raise packet limit so large INSERTs (wp_posts with big post_content) don't kill the connection
+	if _, err := stageDB.Exec("SET GLOBAL max_allowed_packet=268435456"); err != nil {
+		// Non-fatal: may lack SUPER privilege, proceed with default
+		_ = err
+	}
 
 	// Drop all existing tables
 	tables, err := listTables(stageDB)

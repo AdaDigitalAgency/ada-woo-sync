@@ -305,8 +305,11 @@ func dumpRows(db *sql.DB, table, query string, args []interface{}) ([]string, er
 		return nil, err
 	}
 
+	const maxBatchBytes = 8 * 1024 * 1024 // 8MB per INSERT statement
+
 	var stmts []string
-	batch := make([]string, 0, 1000)
+	batch := make([]string, 0, 500)
+	batchBytes := 0
 
 	for rows.Next() {
 		values := make([]interface{}, len(cols))
@@ -322,11 +325,14 @@ func dumpRows(db *sql.DB, table, query string, args []interface{}) ([]string, er
 		for i, v := range values {
 			vals[i] = formatValue(v)
 		}
-		batch = append(batch, "("+strings.Join(vals, ",")+")") //nolint:gocritic
+		row := "(" + strings.Join(vals, ",") + ")"
+		batch = append(batch, row)
+		batchBytes += len(row)
 
-		if len(batch) >= 1000 {
+		if batchBytes >= maxBatchBytes {
 			stmts = append(stmts, buildInsert(table, cols, batch))
 			batch = batch[:0]
+			batchBytes = 0
 		}
 	}
 	if len(batch) > 0 {
