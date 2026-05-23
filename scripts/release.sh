@@ -23,8 +23,8 @@ case "$1" in
 esac
 
 echo "$NEW" > "$VERSION_FILE"
-GIT_EDITOR=true git commit --only "$VERSION_FILE" --message "Release v${NEW}" --no-edit
-git tag "v${NEW}"
+git commit --only "$VERSION_FILE" --message "Release v${NEW}" --no-edit
+git tag -m "Release v${NEW}" "v${NEW}"
 
 echo ""
 echo "✓ Tagged v${NEW}"
