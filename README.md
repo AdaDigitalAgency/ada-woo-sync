@@ -21,15 +21,17 @@ A TUI (Terminal User Interface) tool to synchronize a live WordPress/WooCommerce
 
 ## Install
 
+### Quick install (Linux)
+
+```bash
+curl -sL "https://github.com/AdaDigitalAgency/ada-woo-sync/releases/latest/download/wp-sync_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" -o /tmp/wp-sync && chmod +x /tmp/wp-sync && sudo mv /tmp/wp-sync /usr/local/bin/wp-sync
+```
+
 ### From source
 
 ```bash
 go install github.com/AdaDigitalAgency/ada-woo-sync/cmd/wp-sync@latest
 ```
-
-### From releases
-
-Download the latest binary from [Releases](https://github.com/AdaDigitalAgency/ada-woo-sync/releases) and place it in your `$PATH`.
 
 ## Usage
 
