@@ -24,18 +24,21 @@ var structureOnlyTables = []string{
 	"actionscheduler_claims",
 	"actionscheduler_groups",
 	"actionscheduler_logs",
+	"mainwp_child_changes_logs",
+	"mainwp_child_changes_meta",
 }
 
 // customOrderTables are filtered by order ID.
 var customOrderTables = map[string]string{
-	"wc_orders":                "id",
-	"wc_order_addresses":       "order_id",
+	"wc_orders":                 "id",
+	"wc_order_addresses":        "order_id",
 	"wc_order_operational_data": "order_id",
-	"wc_orders_meta":           "order_id",
-	"wc_order_stats":           "order_id",
-	"wc_order_product_lookup":  "order_id",
-	"wc_order_tax_lookup":      "order_id",
-	"wc_order_coupon_lookup":   "order_id",
+	"wc_orders_meta":            "order_id",
+	"wc_order_stats":            "order_id",
+	"wc_order_product_lookup":   "order_id",
+	"wc_order_tax_lookup":       "order_id",
+	"wc_order_coupon_lookup":    "order_id",
+	"woocommerce_order_items":   "order_id",
 }
 
 func Run(liveDB *sql.DB, prefix string, cfg *config.Config, log progress.Logger) (*Result, error) {
@@ -69,8 +72,15 @@ func Run(liveDB *sql.DB, prefix string, cfg *config.Config, log progress.Logger)
 	totalTables := len(allTables)
 
 	// 4. Structure-only tables
+	tableSet := make(map[string]bool, len(allTables))
+	for _, t := range allTables {
+		tableSet[t] = true
+	}
 	for _, t := range structureOnlyTables {
 		full := prefix + t
+		if !tableSet[full] {
+			continue
+		}
 		log.Detail(fmt.Sprintf("Schema-only: %s", full))
 		ddl, err := getCreateTable(liveDB, full)
 		if err != nil {
@@ -92,6 +102,30 @@ func Run(liveDB *sql.DB, prefix string, cfg *config.Config, log progress.Logger)
 		}
 		res.Orders = append(res.Orders, ddl)
 		inserts, err := dumpFilteredData(liveDB, full, col, orderIDs)
+		if err != nil {
+			return nil, fmt.Errorf("data for %s: %w", full, err)
+		}
+		res.Orders = append(res.Orders, inserts...)
+		handled[full] = true
+		tableDone++
+		log.Progress(tableDone, totalTables)
+	}
+
+	// 5b. woocommerce_order_itemmeta filtered by order_item_id from order_items
+	log.Detail("Resolving order item IDs for itemmeta")
+	orderItemIDs, err := getOrderItemIDs(liveDB, prefix, orderIDs)
+	if err != nil {
+		return nil, fmt.Errorf("order item IDs: %w", err)
+	}
+	{
+		full := prefix + "woocommerce_order_itemmeta"
+		log.Detail(fmt.Sprintf("Orders: %s (%d items)", full, len(orderItemIDs)))
+		ddl, err := getCreateTable(liveDB, full)
+		if err != nil {
+			return nil, fmt.Errorf("schema for %s: %w", full, err)
+		}
+		res.Orders = append(res.Orders, ddl)
+		inserts, err := dumpFilteredData(liveDB, full, "order_item_id", orderItemIDs)
 		if err != nil {
 			return nil, fmt.Errorf("data for %s: %w", full, err)
 		}
@@ -129,8 +163,26 @@ func Run(liveDB *sql.DB, prefix string, cfg *config.Config, log progress.Logger)
 	handled[prefix+"usermeta"] = true
 	tableDone += 2
 	log.Progress(tableDone, totalTables)
+	// 7. YITH points log (filtered by order_id OR user_id)
+	yithTable := prefix + "yith_ywpar_points_log"
+	if tableSet[yithTable] {
+		log.Detail(fmt.Sprintf("Orders+Users: %s", yithTable))
+		ddl, err := getCreateTable(liveDB, yithTable)
+		if err != nil {
+			return nil, fmt.Errorf("schema for %s: %w", yithTable, err)
+		}
+		res.Orders = append(res.Orders, ddl)
+		inserts, err := dumpFilteredByOrderOrUser(liveDB, yithTable, orderIDs, userIDs)
+		if err != nil {
+			return nil, fmt.Errorf("data for %s: %w", yithTable, err)
+		}
+		res.Orders = append(res.Orders, inserts...)
+		handled[yithTable] = true
+		tableDone++
+		log.Progress(tableDone, totalTables)
+	}
 
-	// 7. Base tables (everything else marked as Structure & Data)
+	// 8. Base tables (everything else marked as Structure & Data)
 	for _, t := range allTables {
 		if handled[t] {
 			continue
@@ -312,6 +364,24 @@ func dumpFilteredData(db *sql.DB, table, column string, ids []int64) ([]string, 
 	placeholders := makeInPlaceholders(len(ids))
 	query := fmt.Sprintf("SELECT * FROM `%s` WHERE `%s` IN (%s)", table, column, placeholders)
 	args := int64sToArgs(ids)
+	return dumpRows(db, table, query, args)
+}
+
+func dumpFilteredByOrderOrUser(db *sql.DB, table string, orderIDs, userIDs []int64) ([]string, error) {
+	if len(orderIDs) == 0 && len(userIDs) == 0 {
+		return nil, nil
+	}
+	var conditions []string
+	var args []interface{}
+	if len(orderIDs) > 0 {
+		conditions = append(conditions, fmt.Sprintf("`order_id` IN (%s)", makeInPlaceholders(len(orderIDs))))
+		args = append(args, int64sToArgs(orderIDs)...)
+	}
+	if len(userIDs) > 0 {
+		conditions = append(conditions, fmt.Sprintf("`user_id` IN (%s)", makeInPlaceholders(len(userIDs))))
+		args = append(args, int64sToArgs(userIDs)...)
+	}
+	query := fmt.Sprintf("SELECT * FROM `%s` WHERE %s", table, strings.Join(conditions, " OR "))
 	return dumpRows(db, table, query, args)
 }
 
@@ -506,4 +576,31 @@ func int64sToArgs(ids []int64) []interface{} {
 		args[i] = id
 	}
 	return args
+}
+
+func getOrderItemIDs(db *sql.DB, prefix string, orderIDs []int64) ([]int64, error) {
+	if len(orderIDs) == 0 {
+		return nil, nil
+	}
+	placeholders := makeInPlaceholders(len(orderIDs))
+	query := fmt.Sprintf(
+		"SELECT order_item_id FROM `%swoocommerce_order_items` WHERE order_id IN (%s)",
+		prefix, placeholders,
+	)
+	args := int64sToArgs(orderIDs)
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
