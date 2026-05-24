@@ -58,6 +58,7 @@ func Update(currentVersion string) error {
 	}
 
 	fmt.Printf("Updated to v%s.\n", latest.Version())
+	saveState(&internalState{}) // clear cached version so update notice disappears
 	return nil
 }
 

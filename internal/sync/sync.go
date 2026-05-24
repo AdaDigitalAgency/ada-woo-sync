@@ -110,23 +110,33 @@ func FileSync(livePath, stagePath string, log progress.Logger) error {
 
 // PostProcess executes Step 3: WP-CLI search-replace and cache flush.
 func PostProcess(stagePath, liveDomain, stageDomain string, log progress.Logger) error {
+	hasElementor := dirExists(filepath.Join(stagePath, "wp-content", "plugins", "elementor"))
+
 	commands := []struct {
 		label string
 		args  []string
+		skip  bool
 	}{
 		{fmt.Sprintf("Search-replace: %s → %s", liveDomain, stageDomain),
 			[]string{"wp", "search-replace",
 				"https://" + liveDomain, "https://" + stageDomain,
-				"--all-tables", "--allow-root", "--path=" + stagePath}},
+				"--all-tables", "--allow-root", "--path=" + stagePath},
+			false},
 		{"Elementor URL replace",
 			[]string{"wp", "elementor", "replace-urls",
 				"https://" + liveDomain, "https://" + stageDomain,
-				"--allow-root", "--path=" + stagePath}},
+				"--allow-root", "--path=" + stagePath},
+			!hasElementor},
 		{"Cache flush",
-			[]string{"wp", "cache", "flush", "--allow-root", "--path=" + stagePath}},
+			[]string{"wp", "cache", "flush", "--allow-root", "--path=" + stagePath},
+			false},
 	}
 
 	for i, c := range commands {
+		if c.skip {
+			log.Detail(fmt.Sprintf("Skipping: %s (plugin not installed)", c.label))
+			continue
+		}
 		log.Detail(c.label)
 		log.Progress(i, len(commands))
 		cmd := exec.Command(c.args[0], c.args[1:]...)
@@ -138,6 +148,11 @@ func PostProcess(stagePath, liveDomain, stageDomain string, log progress.Logger)
 	}
 	log.Progress(len(commands), len(commands))
 	return nil
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func detectOwnership(path string) (uint32, uint32) {
