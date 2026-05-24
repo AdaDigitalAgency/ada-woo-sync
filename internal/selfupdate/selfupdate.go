@@ -101,7 +101,7 @@ func updateCheckPath() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".wp-sync-update-check")
+	return filepath.Join(home, ".config", "wp-sync", ".last-update-check")
 }
 
 func shouldCheck(path string) bool {

@@ -24,12 +24,20 @@ type Config struct {
 	TableModes      map[string]TableMode `json:"table_modes"`
 }
 
-func configPath() (string, error) {
+func configDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".wp-sync.json"), nil
+	return filepath.Join(home, ".config", "wp-sync"), nil
+}
+
+func configPath() (string, error) {
+	dir, err := configDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "config.json"), nil
 }
 
 func Load() (*Config, error) {
@@ -49,6 +57,13 @@ func Load() (*Config, error) {
 }
 
 func Save(cfg *Config) error {
+	dir, err := configDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
 	p, err := configPath()
 	if err != nil {
 		return err
