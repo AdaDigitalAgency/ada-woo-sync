@@ -22,10 +22,35 @@ case "$1" in
     ;;
 esac
 
+# Collect commit messages from unpushed local commits
+UPSTREAM=$(git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || echo "origin/main")
+LOCAL_COMMITS=$(git log "$UPSTREAM"..HEAD --oneline 2>/dev/null | wc -l | tr -d ' ')
+
+if [ "$LOCAL_COMMITS" -gt "0" ]; then
+  # Gather messages before squashing
+  MESSAGES=$(git log "$UPSTREAM"..HEAD --format="- %s" --reverse)
+
+  # Soft-reset to upstream, stage everything, create one squashed commit
+  git reset --soft "$UPSTREAM"
+fi
+
+# Bump version file
 echo "$NEW" > "$VERSION_FILE"
-git commit --only "$VERSION_FILE" --message "Release v${NEW}" --no-edit
-git tag -m "Release v${NEW}" "v${NEW}"
+git add -A
+
+# Build the commit message
+COMMIT_MSG="Release v${NEW}"
+if [ -n "$MESSAGES" ]; then
+  COMMIT_MSG="$COMMIT_MSG
+
+$MESSAGES"
+fi
+
+git commit -m "$COMMIT_MSG"
+git tag -a "v${NEW}" -m "Release v${NEW}"
+
+# Push
+git push origin main --tags
 
 echo ""
-echo "✓ Tagged v${NEW}"
-echo "  Run 'git push origin main --tags' to trigger the release build."
+echo "✓ Released v${NEW}"
