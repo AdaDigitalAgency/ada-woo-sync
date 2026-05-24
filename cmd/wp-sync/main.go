@@ -41,6 +41,8 @@ func main() {
 		return
 	}
 
+	selfupdate.CheckVersion(version)
+
 	if *unattended {
 		if err := runUnattended(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
