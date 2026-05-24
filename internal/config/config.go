@@ -41,6 +41,7 @@ func configPath() (string, error) {
 }
 
 func Load() (*Config, error) {
+	migrateOldConfig()
 	p, err := configPath()
 	if err != nil {
 		return nil, err
@@ -54,6 +55,36 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 	return &cfg, nil
+}
+
+func migrateOldConfig() {
+	newPath, err := configPath()
+	if err != nil {
+		return
+	}
+	if _, err := os.Stat(newPath); err == nil {
+		return // new location already exists
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	oldPath := filepath.Join(home, ".wp-sync.json")
+	if _, err := os.Stat(oldPath); err != nil {
+		return // no old file either
+	}
+	dir, _ := configDir()
+	_ = os.MkdirAll(dir, 0755)
+	if err := os.Rename(oldPath, newPath); err != nil {
+		// Fall back to copy+delete if rename fails (cross-device)
+		data, err := os.ReadFile(oldPath)
+		if err != nil {
+			return
+		}
+		if os.WriteFile(newPath, data, 0644) == nil {
+			os.Remove(oldPath)
+		}
+	}
 }
 
 func Save(cfg *Config) error {
