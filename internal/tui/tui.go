@@ -85,6 +85,7 @@ var (
 )
 
 var activeProgram *tea.Program
+var syncStartedAt time.Time
 var syncCompletedAt time.Time
 
 func Run(latestVersion string) error {
@@ -94,7 +95,8 @@ func Run(latestVersion string) error {
 	activeProgram = p
 	_, err := p.Run()
 	if err == nil && !syncCompletedAt.IsZero() {
-		fmt.Printf("Sync completed at %s\n", syncCompletedAt.Format("2006-01-02 15:04:05"))
+		duration := syncCompletedAt.Sub(syncStartedAt).Truncate(time.Second)
+		fmt.Printf("Sync completed at %s and it took %s\n", syncCompletedAt.Format("2006-01-02 15:04:05"), duration)
 	}
 	return err
 }
@@ -138,9 +140,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case syncDoneMsg:
 		m.step = stepDone
 		m.err = msg.err
-		if msg.err == nil {
-			syncCompletedAt = time.Now()
-		}
+		syncCompletedAt = time.Now()
 		return m, nil
 
 	case stepMsg:
@@ -371,7 +371,8 @@ func (m model) View() string {
 		if m.err != nil {
 			b.WriteString(errorStyle.Render("✗ Sync failed: " + m.err.Error()) + "\n")
 		} else {
-			b.WriteString(successStyle.Render("✓ Sync complete!") + "\n")
+			duration := syncCompletedAt.Sub(syncStartedAt).Truncate(time.Second)
+			b.WriteString(successStyle.Render(fmt.Sprintf("✓ Sync complete! (took %s)", duration)) + "\n")
 		}
 		b.WriteString("\n" + dimStyle.Render("Press Enter or q to exit"))
 	}
@@ -662,6 +663,7 @@ func (m model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.spinnerFrame = 0
 		config.Save(m.cfg)
 
+		syncStartedAt = time.Now()
 		return m, tea.Batch(
 			func() tea.Msg {
 				err := runSync(m.cfg, m.liveWP, m.stageWP, activeProgram)

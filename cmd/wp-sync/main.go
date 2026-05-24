@@ -63,6 +63,7 @@ func main() {
 
 func runUnattended() error {
 	log := progress.NewCLILogger()
+	started := time.Now()
 
 	log.Step("Loading saved configuration")
 	cfg, err := config.Load()
@@ -133,6 +134,7 @@ func runUnattended() error {
 	}
 	log.StepDone("Post-processing complete")
 
-	log.StepDone(fmt.Sprintf("Sync completed at %s", time.Now().Format("2006-01-02 15:04:05")))
+	duration := time.Since(started).Truncate(time.Second)
+	log.StepDone(fmt.Sprintf("Sync completed at %s and it took %s", time.Now().Format("2006-01-02 15:04:05"), duration))
 	return nil
 }
