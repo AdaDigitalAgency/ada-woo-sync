@@ -64,6 +64,7 @@ type model struct {
 	progressCurrent int
 	progressTotal   int
 	spinnerFrame    int
+	updateAvailable string // latest version, empty if up to date
 }
 
 type syncDoneMsg struct{ err error }
@@ -80,12 +81,14 @@ var (
 	successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	updateStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).MarginTop(1)
 )
 
 var activeProgram *tea.Program
 
-func Run() error {
+func Run(latestVersion string) error {
 	m := initialModel()
+	m.updateAvailable = latestVersion
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	activeProgram = p
 	_, err := p.Run()
@@ -363,6 +366,10 @@ func (m model) View() string {
 
 	if m.err != nil && m.step != stepDone {
 		b.WriteString("\n" + errorStyle.Render("Error: "+m.err.Error()))
+	}
+
+	if m.updateAvailable != "" {
+		b.WriteString("\n" + updateStyle.Render(fmt.Sprintf("Update available: v%s → run 'wp-sync --update'", m.updateAvailable)))
 	}
 
 	return b.String()

@@ -2,11 +2,12 @@ package selfupdate
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/creativeprojects/go-selfupdate"
@@ -60,68 +61,95 @@ func Update(currentVersion string) error {
 	return nil
 }
 
-// CheckVersion prints a one-liner to stderr if a newer version is available.
-// Skips the network call if the last check was less than 8 hours ago.
-func CheckVersion(currentVersion string) {
+// CheckVersion returns the latest version string if a newer version is available.
+// Checks GitHub at most every 8 hours, but returns the cached result on every call
+// so the update notice persists until the user actually upgrades.
+func CheckVersion(currentVersion string) string {
 	if currentVersion == "dev" {
-		return
+		return ""
 	}
 
-	tsFile := updateCheckPath()
-	if !shouldCheck(tsFile) {
-		return
+	state := loadState()
+
+	if shouldCheck(state) {
+		if v := fetchLatest(); v != "" {
+			state.LatestVersion = v
+		}
+		state.LastCheck = time.Now().Unix()
+		saveState(state)
 	}
 
-	// Persist timestamp regardless of outcome so we don't spam on errors
-	saveTimestamp(tsFile)
-
-	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})
-	if err != nil {
-		return
-	}
-	updater, err := selfupdate.NewUpdater(selfupdate.Config{Source: source})
-	if err != nil {
-		return
+	if state.LatestVersion == "" {
+		return ""
 	}
 
-	latest, found, err := updater.DetectLatest(context.Background(), selfupdate.NewRepositorySlug(repoOwner, repoName))
-	if err != nil || !found {
-		return
+	// Normalize and compare: strip "v" prefix from both
+	cached := strings.TrimPrefix(state.LatestVersion, "v")
+	current := strings.TrimPrefix(currentVersion, "v")
+	if cached == current {
+		return ""
 	}
 
-	if latest.LessOrEqual(currentVersion) {
-		return
-	}
-
-	fmt.Fprintf(os.Stderr, "\033[33mA new version is available: v%s (current: %s). Run 'wp-sync --update' to upgrade.\033[0m\n", latest.Version(), currentVersion)
+	return state.LatestVersion
 }
 
-func updateCheckPath() string {
+type internalState struct {
+	LastCheck     int64  `json:"last_check"`
+	LatestVersion string `json:"latest_version"`
+}
+
+func statePath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".config", "wp-sync", ".last-update-check")
+	return filepath.Join(home, ".config", "wp-sync", ".internal")
 }
 
-func shouldCheck(path string) bool {
-	if path == "" {
-		return false
+func loadState() *internalState {
+	p := statePath()
+	if p == "" {
+		return &internalState{}
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(p)
 	if err != nil {
-		return true // no file = never checked
+		return &internalState{}
 	}
-	ts, err := strconv.ParseInt(string(data), 10, 64)
-	if err != nil {
-		return true
+	var s internalState
+	if err := json.Unmarshal(data, &s); err != nil {
+		return &internalState{}
 	}
-	return time.Since(time.Unix(ts, 0)) >= 8*time.Hour
+	return &s
 }
 
-func saveTimestamp(path string) {
-	if path == "" {
+func saveState(s *internalState) {
+	p := statePath()
+	if p == "" {
 		return
 	}
-	_ = os.WriteFile(path, []byte(strconv.FormatInt(time.Now().Unix(), 10)), 0644)
+	data, _ := json.Marshal(s)
+	_ = os.WriteFile(p, data, 0644)
+}
+
+func shouldCheck(s *internalState) bool {
+	if s.LastCheck == 0 {
+		return true
+	}
+	return time.Since(time.Unix(s.LastCheck, 0)) >= 8*time.Hour
+}
+
+func fetchLatest() string {
+	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})
+	if err != nil {
+		return ""
+	}
+	updater, err := selfupdate.NewUpdater(selfupdate.Config{Source: source})
+	if err != nil {
+		return ""
+	}
+	latest, found, err := updater.DetectLatest(context.Background(), selfupdate.NewRepositorySlug(repoOwner, repoName))
+	if err != nil || !found {
+		return ""
+	}
+	return latest.Version()
 }

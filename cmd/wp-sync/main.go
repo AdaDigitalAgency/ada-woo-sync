@@ -41,9 +41,12 @@ func main() {
 		return
 	}
 
-	selfupdate.CheckVersion(version)
+	latestVersion := selfupdate.CheckVersion(version)
 
 	if *unattended {
+		if latestVersion != "" {
+			fmt.Fprintf(os.Stderr, "\033[33mUpdate available: v%s → v%s. Run 'wp-sync --update' to upgrade.\033[0m\n", version, latestVersion)
+		}
 		if err := runUnattended(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -51,7 +54,7 @@ func main() {
 		return
 	}
 
-	if err := tui.Run(); err != nil {
+	if err := tui.Run(latestVersion); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
