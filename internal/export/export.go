@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/AdaDigitalAgency/ada-woo-sync/internal/config"
+	"github.com/AdaDigitalAgency/ada-woo-sync/internal/progress"
 )
 
 // Result holds all generated SQL grouped by category.
@@ -37,43 +38,54 @@ var customOrderTables = map[string]string{
 	"wc_order_coupon_lookup":   "order_id",
 }
 
-func Run(liveDB *sql.DB, prefix string, cfg *config.Config) (*Result, error) {
+func Run(liveDB *sql.DB, prefix string, cfg *config.Config, log progress.Logger) (*Result, error) {
 	res := &Result{}
 
 	// 1. Determine target order IDs
+	log.Detail(fmt.Sprintf("Querying target orders (%s %d)", cfg.OrderPreference, cfg.OrderCount))
 	orderIDs, err := getTargetOrderIDs(liveDB, prefix, cfg.OrderCount, cfg.OrderPreference)
 	if err != nil {
 		return nil, fmt.Errorf("target orders: %w", err)
 	}
+	log.Detail(fmt.Sprintf("Found %d orders", len(orderIDs)))
 
 	// 2. Calculate safe user IDs
+	log.Detail("Resolving safe user set")
 	userIDs, err := getSafeUserIDs(liveDB, prefix, orderIDs)
 	if err != nil {
 		return nil, fmt.Errorf("safe users: %w", err)
 	}
+	log.Detail(fmt.Sprintf("Found %d users to export", len(userIDs)))
 
 	// 3. All tables in the database
 	allTables, err := listTables(liveDB)
 	if err != nil {
 		return nil, fmt.Errorf("listing tables: %w", err)
 	}
+	log.Detail(fmt.Sprintf("Found %d tables in live database", len(allTables)))
 
 	handled := make(map[string]bool)
+	tableDone := 0
+	totalTables := len(allTables)
 
 	// 4. Structure-only tables
 	for _, t := range structureOnlyTables {
 		full := prefix + t
+		log.Detail(fmt.Sprintf("Schema-only: %s", full))
 		ddl, err := getCreateTable(liveDB, full)
 		if err != nil {
 			return nil, fmt.Errorf("schema for %s: %w", full, err)
 		}
 		res.SchemaOnly = append(res.SchemaOnly, ddl)
 		handled[full] = true
+		tableDone++
+		log.Progress(tableDone, totalTables)
 	}
 
 	// 5. Custom rule: HPOS & order tables
 	for t, col := range customOrderTables {
 		full := prefix + t
+		log.Detail(fmt.Sprintf("Orders: %s", full))
 		ddl, err := getCreateTable(liveDB, full)
 		if err != nil {
 			return nil, fmt.Errorf("schema for %s: %w", full, err)
@@ -85,27 +97,38 @@ func Run(liveDB *sql.DB, prefix string, cfg *config.Config) (*Result, error) {
 		}
 		res.Orders = append(res.Orders, inserts...)
 		handled[full] = true
+		tableDone++
+		log.Progress(tableDone, totalTables)
 	}
 
 	// 5b. Comments filtered by order IDs
+	log.Detail("Exporting comments for target orders")
 	commentIDs, err := exportComments(liveDB, prefix, orderIDs, res)
 	if err != nil {
 		return nil, fmt.Errorf("comments: %w", err)
 	}
 	handled[prefix+"comments"] = true
+	tableDone++
+	log.Progress(tableDone, totalTables)
 
 	// 5c. Commentmeta filtered by comment IDs
+	log.Detail(fmt.Sprintf("Exporting commentmeta (%d comments)", len(commentIDs)))
 	if err := exportCommentmeta(liveDB, prefix, commentIDs, res); err != nil {
 		return nil, fmt.Errorf("commentmeta: %w", err)
 	}
 	handled[prefix+"commentmeta"] = true
+	tableDone++
+	log.Progress(tableDone, totalTables)
 
 	// 6. Users & usermeta
+	log.Detail(fmt.Sprintf("Exporting %d users + usermeta", len(userIDs)))
 	if err := exportUsers(liveDB, prefix, userIDs, res); err != nil {
 		return nil, fmt.Errorf("users: %w", err)
 	}
 	handled[prefix+"users"] = true
 	handled[prefix+"usermeta"] = true
+	tableDone += 2
+	log.Progress(tableDone, totalTables)
 
 	// 7. Base tables (everything else marked as Structure & Data)
 	for _, t := range allTables {
@@ -115,14 +138,16 @@ func Run(liveDB *sql.DB, prefix string, cfg *config.Config) (*Result, error) {
 		mode := getTableMode(cfg, t, prefix)
 		switch mode {
 		case config.TableModeIgnore:
-			continue
+			log.Detail(fmt.Sprintf("Skipping: %s", t))
 		case config.TableModeStructureOnly:
+			log.Detail(fmt.Sprintf("Schema-only: %s", t))
 			ddl, err := getCreateTable(liveDB, t)
 			if err != nil {
 				return nil, fmt.Errorf("schema for %s: %w", t, err)
 			}
 			res.SchemaOnly = append(res.SchemaOnly, ddl)
 		case config.TableModeStructureAndData:
+			log.Detail(fmt.Sprintf("Dumping: %s", t))
 			ddl, err := getCreateTable(liveDB, t)
 			if err != nil {
 				return nil, fmt.Errorf("schema for %s: %w", t, err)
@@ -134,6 +159,8 @@ func Run(liveDB *sql.DB, prefix string, cfg *config.Config) (*Result, error) {
 			}
 			res.Base = append(res.Base, inserts...)
 		}
+		tableDone++
+		log.Progress(tableDone, totalTables)
 	}
 
 	return res, nil

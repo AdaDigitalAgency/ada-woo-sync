@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/AdaDigitalAgency/ada-woo-sync/internal/config"
 	"github.com/AdaDigitalAgency/ada-woo-sync/internal/db"
 	"github.com/AdaDigitalAgency/ada-woo-sync/internal/discovery"
 	"github.com/AdaDigitalAgency/ada-woo-sync/internal/export"
 	"github.com/AdaDigitalAgency/ada-woo-sync/internal/guardrail"
+	"github.com/AdaDigitalAgency/ada-woo-sync/internal/progress"
 	"github.com/AdaDigitalAgency/ada-woo-sync/internal/sync"
 	"github.com/AdaDigitalAgency/ada-woo-sync/internal/wpconfig"
 
@@ -54,9 +56,22 @@ type model struct {
 	status     string
 	width      int
 	height     int
+
+	// Progress tracking for stepRunning
+	completedSteps  []string // steps that finished (shown with ✓)
+	currentStep     string   // step currently in progress
+	currentDetail   string   // detail message under current step
+	progressCurrent int
+	progressTotal   int
+	spinnerFrame    int
 }
 
 type syncDoneMsg struct{ err error }
+type stepMsg struct{ name string }
+type detailMsg struct{ msg string }
+type progressMsg struct{ current, total int }
+type stepDoneMsg struct{ msg string }
+type spinTickMsg struct{}
 
 var (
 	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).MarginBottom(1)
@@ -67,9 +82,12 @@ var (
 	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 )
 
+var activeProgram *tea.Program
+
 func Run() error {
 	m := initialModel()
 	p := tea.NewProgram(m, tea.WithAltScreen())
+	activeProgram = p
 	_, err := p.Run()
 	return err
 }
@@ -113,6 +131,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case syncDoneMsg:
 		m.step = stepDone
 		m.err = msg.err
+		return m, nil
+
+	case stepMsg:
+		m.currentStep = msg.name
+		m.currentDetail = ""
+		m.progressCurrent = 0
+		m.progressTotal = 0
+		return m, nil
+
+	case detailMsg:
+		m.currentDetail = msg.msg
+		return m, nil
+
+	case progressMsg:
+		m.progressCurrent = msg.current
+		m.progressTotal = msg.total
+		return m, nil
+
+	case stepDoneMsg:
+		m.completedSteps = append(m.completedSteps, msg.msg)
+		m.currentStep = ""
+		m.currentDetail = ""
+		m.progressCurrent = 0
+		m.progressTotal = 0
+		return m, nil
+
+	case spinTickMsg:
+		if m.step == stepRunning {
+			m.spinnerFrame++
+			return m, tickSpinner()
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -273,7 +322,35 @@ func (m model) View() string {
 
 	case stepRunning:
 		b.WriteString(promptStyle.Render("Syncing...") + "\n\n")
-		b.WriteString(m.status + "\n")
+
+		// Completed steps
+		for _, s := range m.completedSteps {
+			b.WriteString(successStyle.Render("  ✓ "+s) + "\n")
+		}
+
+		// Current step with spinner
+		if m.currentStep != "" {
+			spinChars := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+			spin := spinChars[m.spinnerFrame%len(spinChars)]
+			b.WriteString(selectedStyle.Render("  "+spin+" "+m.currentStep) + "\n")
+
+			// Detail line
+			if m.currentDetail != "" {
+				b.WriteString(dimStyle.Render("    "+m.currentDetail) + "\n")
+			}
+
+			// Progress bar
+			if m.progressTotal > 0 {
+				barWidth := 30
+				filled := barWidth * m.progressCurrent / m.progressTotal
+				if filled > barWidth {
+					filled = barWidth
+				}
+				bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+				pct := 100 * m.progressCurrent / m.progressTotal
+				b.WriteString(dimStyle.Render(fmt.Sprintf("    [%s] %d/%d (%d%%)", bar, m.progressCurrent, m.progressTotal, pct)) + "\n")
+			}
+		}
 
 	case stepDone:
 		if m.err != nil {
@@ -532,53 +609,76 @@ func (m model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyEnter:
 		m.step = stepRunning
-		m.status = "Saving config..."
+		m.status = "Starting..."
+		m.completedSteps = nil
+		m.currentStep = ""
+		m.currentDetail = ""
+		m.progressCurrent = 0
+		m.progressTotal = 0
+		m.spinnerFrame = 0
 		config.Save(m.cfg)
 
-		return m, func() tea.Msg {
-			err := runSync(m.cfg, m.liveWP, m.stageWP)
-			return syncDoneMsg{err: err}
-		}
+		return m, tea.Batch(
+			func() tea.Msg {
+				err := runSync(m.cfg, m.liveWP, m.stageWP, activeProgram)
+				return syncDoneMsg{err: err}
+			},
+			tickSpinner(),
+		)
 	}
 	return m, nil
 }
 
 // --- Helpers ---
 
-func runSync(cfg *config.Config, liveWP, stageWP *wpconfig.WPConfig) error {
+func runSync(cfg *config.Config, liveWP, stageWP *wpconfig.WPConfig, p *tea.Program) error {
+	log := &tuiLogger{p: p}
+
 	// Safety: ensure live ≠ stage
+	log.Step("Validating paths and databases")
 	if err := guardrail.ValidatePaths(cfg.LivePath, cfg.StagePath); err != nil {
 		return err
 	}
 	if err := guardrail.ValidateDBs(liveWP, stageWP); err != nil {
 		return err
 	}
+	log.StepDone("Validation passed")
 
+	log.Step("Connecting to databases")
 	liveDB, stageDB, err := db.Connect(liveWP, stageWP)
 	if err != nil {
 		return fmt.Errorf("database connection: %w", err)
 	}
 	defer liveDB.Close()
 	defer stageDB.Close()
+	log.StepDone("Connected")
 
-	exp, err := export.Run(liveDB, liveWP.TablePrefix, cfg)
+	log.Step("Exporting from live database")
+	exp, err := export.Run(liveDB, liveWP.TablePrefix, cfg, log)
 	if err != nil {
 		return fmt.Errorf("export: %w", err)
 	}
+	log.StepDone("Export complete")
 
-	if err := sync.Import(stageDB, exp); err != nil {
+	log.Step("Importing to staging database")
+	if err := sync.Import(stageDB, exp, log); err != nil {
 		return fmt.Errorf("import: %w", err)
 	}
+	log.StepDone("Import complete")
 
-	if err := sync.FileSync(cfg.LivePath, cfg.StagePath); err != nil {
+	log.Step("Syncing files")
+	if err := sync.FileSync(cfg.LivePath, cfg.StagePath, log); err != nil {
 		return fmt.Errorf("file sync: %w", err)
 	}
+	log.StepDone("File sync complete")
 
+	log.Step("Post-processing")
 	domain := discovery.ExtractDomain(cfg.LivePath)
 	stageDomain := discovery.ExtractDomain(cfg.StagePath)
-	if err := sync.PostProcess(cfg.StagePath, domain, stageDomain); err != nil {
+	if err := sync.PostProcess(cfg.StagePath, domain, stageDomain, log); err != nil {
 		return fmt.Errorf("post-processing: %w", err)
 	}
+	log.StepDone("Post-processing complete")
 
 	return nil
 }
@@ -667,4 +767,34 @@ func getDisplayMode(cfg *config.Config, table string) string {
 	default:
 		return string(mode)
 	}
+}
+
+// --- TUI Logger ---
+
+type tuiLogger struct {
+	p *tea.Program
+}
+
+func (l *tuiLogger) Step(name string) {
+	l.p.Send(stepMsg{name: name})
+}
+
+func (l *tuiLogger) Detail(msg string) {
+	l.p.Send(detailMsg{msg: msg})
+}
+
+func (l *tuiLogger) Progress(current, total int) {
+	l.p.Send(progressMsg{current: current, total: total})
+}
+
+func (l *tuiLogger) StepDone(msg string) {
+	l.p.Send(stepDoneMsg{msg: msg})
+}
+
+var _ progress.Logger = (*tuiLogger)(nil)
+
+func tickSpinner() tea.Cmd {
+	return tea.Tick(80*time.Millisecond, func(_ time.Time) tea.Msg {
+		return spinTickMsg{}
+	})
 }
