@@ -111,6 +111,7 @@ func FileSync(livePath, stagePath string, log progress.Logger) error {
 // PostProcess executes Step 3: WP-CLI search-replace and cache flush.
 func PostProcess(stagePath, liveDomain, stageDomain string, log progress.Logger) error {
 	hasElementor := dirExists(filepath.Join(stagePath, "wp-content", "plugins", "elementor"))
+	hasJetpack := dirExists(filepath.Join(stagePath, "wp-content", "plugins", "jetpack"))
 
 	commands := []struct {
 		label string
@@ -127,6 +128,10 @@ func PostProcess(stagePath, liveDomain, stageDomain string, log progress.Logger)
 				"https://" + liveDomain, "https://" + stageDomain,
 				"--allow-root", "--path=" + stagePath},
 			!hasElementor},
+		{"Jetpack safe mode",
+			[]string{"wp", "option", "update", "jetpack_safe_mode_confirmed", "1",
+				"--allow-root", "--quiet", "--path=" + stagePath},
+			!hasJetpack},
 		{"Cache flush",
 			[]string{"wp", "cache", "flush", "--allow-root", "--path=" + stagePath},
 			false},
