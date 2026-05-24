@@ -87,6 +87,7 @@ func FileSync(livePath, stagePath string, log progress.Logger) error {
 		"--exclude=critical-css",
 		"--exclude=litespeed",
 		"--exclude=updraft",
+		"--exclude=archive-master-db",
 		src, dst,
 	)
 	if err := cmd.Run(); err != nil {
