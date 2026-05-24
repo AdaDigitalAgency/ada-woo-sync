@@ -313,7 +313,7 @@ func (m model) View() string {
 
 		for i := start; i < end; i++ {
 			t := m.allTables[i]
-			mode := getDisplayMode(m.cfg, t)
+			mode := getDisplayMode(m.cfg, t, m.liveWP.TablePrefix)
 			prefix := "  "
 			style := lipgloss.NewStyle()
 			if i == m.cursor {
@@ -612,6 +612,11 @@ func (m model) updateTableSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case tea.KeySpace:
 		t := m.allTables[m.cursor]
+		short := strings.TrimPrefix(t, m.liveWP.TablePrefix)
+		builtin := export.DefaultTableMode(short)
+		if builtin == config.TableModeCustomRule || builtin == config.TableModeStructureOnly {
+			break // built-in rule, not user-configurable
+		}
 		m.cfg.TableModes[t] = cycleMode(m.cfg.TableModes[t])
 	case tea.KeyEnter:
 		m.step = stepConfirm
@@ -769,10 +774,11 @@ func cycleMode(current config.TableMode) config.TableMode {
 	}
 }
 
-func getDisplayMode(cfg *config.Config, table string) string {
+func getDisplayMode(cfg *config.Config, table, prefix string) string {
 	mode, ok := cfg.TableModes[table]
 	if !ok {
-		mode = config.TableModeStructureAndData
+		short := strings.TrimPrefix(table, prefix)
+		mode = export.DefaultTableMode(short)
 	}
 	switch mode {
 	case config.TableModeStructureAndData:

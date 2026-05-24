@@ -41,6 +41,32 @@ var customOrderTables = map[string]string{
 	"woocommerce_order_items":   "order_id",
 }
 
+// customRuleTables are handled with special filtering logic.
+var customRuleTables = map[string]bool{
+	"woocommerce_order_itemmeta":  true,
+	"yith_ywpar_points_log":       true,
+	"comments":                    true,
+	"commentmeta":                 true,
+	"users":                       true,
+	"usermeta":                    true,
+}
+
+// DefaultTableMode returns the built-in mode for a table name (without prefix).
+func DefaultTableMode(shortName string) config.TableMode {
+	for _, t := range structureOnlyTables {
+		if t == shortName {
+			return config.TableModeStructureOnly
+		}
+	}
+	if _, ok := customOrderTables[shortName]; ok {
+		return config.TableModeCustomRule
+	}
+	if customRuleTables[shortName] {
+		return config.TableModeCustomRule
+	}
+	return config.TableModeStructureAndData
+}
+
 func Run(liveDB *sql.DB, prefix string, cfg *config.Config, log progress.Logger) (*Result, error) {
 	res := &Result{}
 
