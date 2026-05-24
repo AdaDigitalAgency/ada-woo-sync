@@ -295,7 +295,7 @@ func (m model) View() string {
 
 	case stepTableSelect:
 		b.WriteString(promptStyle.Render("Table sync modes:") + "\n")
-		b.WriteString(dimStyle.Render("↑/↓ navigate, Space to cycle mode, Enter to confirm") + "\n\n")
+		b.WriteString(dimStyle.Render("↑/↓ navigate, PgUp/PgDn jump, Space to cycle mode, Enter to confirm") + "\n\n")
 
 		// Show visible window of tables
 		windowSize := m.height - 10
@@ -601,15 +601,35 @@ func (m model) updateSyncParams(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateTableSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	pageSize := m.height - 10
+	if pageSize < 5 {
+		pageSize = 5
+	}
+	last := len(m.allTables) - 1
+
 	switch msg.Type {
 	case tea.KeyUp:
 		if m.cursor > 0 {
 			m.cursor--
 		}
 	case tea.KeyDown:
-		if m.cursor < len(m.allTables)-1 {
+		if m.cursor < last {
 			m.cursor++
 		}
+	case tea.KeyPgUp:
+		m.cursor -= pageSize
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+	case tea.KeyPgDown:
+		m.cursor += pageSize
+		if m.cursor > last {
+			m.cursor = last
+		}
+	case tea.KeyHome:
+		m.cursor = 0
+	case tea.KeyEnd:
+		m.cursor = last
 	case tea.KeySpace:
 		t := m.allTables[m.cursor]
 		short := strings.TrimPrefix(t, m.liveWP.TablePrefix)
