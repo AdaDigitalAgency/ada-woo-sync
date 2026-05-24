@@ -725,39 +725,12 @@ func queryTables(liveDB *sql.DB) ([]string, error) {
 }
 
 func applyDefaultModes(cfg *config.Config, tables []string, prefix string) {
-	structOnly := map[string]bool{
-		prefix + "woocommerce_sessions":     true,
-		prefix + "actionscheduler_actions":  true,
-		prefix + "actionscheduler_claims":   true,
-		prefix + "actionscheduler_groups":   true,
-		prefix + "actionscheduler_logs":     true,
-	}
-	customRule := map[string]bool{
-		prefix + "wc_orders":                true,
-		prefix + "wc_order_addresses":       true,
-		prefix + "wc_order_operational_data": true,
-		prefix + "wc_orders_meta":           true,
-		prefix + "wc_order_stats":           true,
-		prefix + "wc_order_product_lookup":  true,
-		prefix + "wc_order_tax_lookup":      true,
-		prefix + "wc_order_coupon_lookup":   true,
-		prefix + "comments":                 true,
-		prefix + "commentmeta":              true,
-		prefix + "users":                    true,
-		prefix + "usermeta":                 true,
-	}
-
 	for _, t := range tables {
 		if _, exists := cfg.TableModes[t]; exists {
 			continue
 		}
-		if structOnly[t] {
-			cfg.TableModes[t] = config.TableModeStructureOnly
-		} else if customRule[t] {
-			cfg.TableModes[t] = config.TableModeCustomRule
-		} else {
-			cfg.TableModes[t] = config.TableModeStructureAndData
-		}
+		short := strings.TrimPrefix(t, prefix)
+		cfg.TableModes[t] = export.DefaultTableMode(short)
 	}
 }
 
@@ -775,10 +748,14 @@ func cycleMode(current config.TableMode) config.TableMode {
 }
 
 func getDisplayMode(cfg *config.Config, table, prefix string) string {
-	mode, ok := cfg.TableModes[table]
-	if !ok {
-		short := strings.TrimPrefix(table, prefix)
-		mode = export.DefaultTableMode(short)
+	short := strings.TrimPrefix(table, prefix)
+	builtin := export.DefaultTableMode(short)
+	// Built-in rules always take precedence
+	mode := builtin
+	if builtin == config.TableModeStructureAndData {
+		if saved, ok := cfg.TableModes[table]; ok {
+			mode = saved
+		}
 	}
 	switch mode {
 	case config.TableModeStructureAndData:
