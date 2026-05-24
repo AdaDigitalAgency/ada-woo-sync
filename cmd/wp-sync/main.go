@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/AdaDigitalAgency/ada-woo-sync/internal/config"
 	"github.com/AdaDigitalAgency/ada-woo-sync/internal/db"
@@ -132,6 +133,6 @@ func runUnattended() error {
 	}
 	log.StepDone("Post-processing complete")
 
-	log.StepDone("Sync complete")
+	log.StepDone(fmt.Sprintf("Sync completed at %s", time.Now().Format("2006-01-02 15:04:05")))
 	return nil
 }

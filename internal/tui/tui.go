@@ -85,6 +85,7 @@ var (
 )
 
 var activeProgram *tea.Program
+var syncCompletedAt time.Time
 
 func Run(latestVersion string) error {
 	m := initialModel()
@@ -92,6 +93,9 @@ func Run(latestVersion string) error {
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	activeProgram = p
 	_, err := p.Run()
+	if err == nil && !syncCompletedAt.IsZero() {
+		fmt.Printf("Sync completed at %s\n", syncCompletedAt.Format("2006-01-02 15:04:05"))
+	}
 	return err
 }
 
@@ -134,6 +138,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case syncDoneMsg:
 		m.step = stepDone
 		m.err = msg.err
+		if msg.err == nil {
+			syncCompletedAt = time.Now()
+		}
 		return m, nil
 
 	case stepMsg:
@@ -356,6 +363,11 @@ func (m model) View() string {
 		}
 
 	case stepDone:
+		// Show completed steps as a summary
+		for _, s := range m.completedSteps {
+			b.WriteString(successStyle.Render("  ✓ "+s) + "\n")
+		}
+		b.WriteString("\n")
 		if m.err != nil {
 			b.WriteString(errorStyle.Render("✗ Sync failed: " + m.err.Error()) + "\n")
 		} else {

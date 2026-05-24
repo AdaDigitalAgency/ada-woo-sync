@@ -81,7 +81,7 @@ func FileSync(livePath, stagePath string, log progress.Logger) error {
 	dst := filepath.Join(stagePath, "wp-content") + "/"
 
 	log.Detail(fmt.Sprintf("rsync %s → %s", src, dst))
-	cmd := exec.Command("rsync", "-av", "--delete",
+	cmd := exec.Command("rsync", "-a", "--delete",
 		"--exclude=cache",
 		"--exclude=ewww",
 		"--exclude=critical-css",
@@ -89,8 +89,6 @@ func FileSync(livePath, stagePath string, log progress.Logger) error {
 		"--exclude=updraft",
 		src, dst,
 	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("rsync: %w", err)
 	}
@@ -99,8 +97,6 @@ func FileSync(livePath, stagePath string, log progress.Logger) error {
 	uid, gid := detectOwnership(stagePath)
 	log.Detail(fmt.Sprintf("Fixing ownership to %d:%d", uid, gid))
 	chown := exec.Command("chown", "-R", fmt.Sprintf("%d:%d", uid, gid), dst)
-	chown.Stdout = os.Stdout
-	chown.Stderr = os.Stderr
 	if err := chown.Run(); err != nil {
 		return fmt.Errorf("chown: %w", err)
 	}
@@ -145,8 +141,6 @@ func PostProcess(stagePath, liveDomain, stageDomain string, log progress.Logger)
 		log.Detail(c.label)
 		log.Progress(i, len(commands))
 		cmd := exec.Command(c.args[0], c.args[1:]...)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("running %s: %w", strings.Join(c.args, " "), err)
 		}
