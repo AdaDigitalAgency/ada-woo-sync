@@ -50,6 +50,9 @@ type model struct {
 	discovered     []string
 	sitePairs      []discovery.SitePair
 	pathMode       pathMode
+	curDir         string
+	dirItems       []string
+	dirCursor      int
 	liveWP         *wpconfig.WPConfig
 	stageWP        *wpconfig.WPConfig
 	allTables      []string
@@ -111,10 +114,18 @@ func initialModel() model {
 	discovered := discovery.Scan()
 	pairs := discovery.PairSites(discovered)
 
+	var curDir string
+	if home, err := os.UserHomeDir(); err == nil {
+		curDir = home
+	} else {
+		curDir = "/"
+	}
+
 	m := model{
 		discovered: discovered,
 		sitePairs:  pairs,
 		savedSites: sites,
+		curDir:     curDir,
 		cfg: &config.Config{
 			OrderCount:      100,
 			OrderPreference: "last",
@@ -128,6 +139,7 @@ func initialModel() model {
 		m.step = stepPaths
 	}
 
+	m = m.readSubdirs()
 	return m
 }
 
@@ -294,16 +306,37 @@ func (m model) View() string {
 				b.WriteString(marker + dimStyle.Render("Custom paths...") + "\n")
 			}
 		} else {
-			// Manual input mode
-			b.WriteString(promptStyle.Render("Enter paths:") + "\n\n")
+			// Manual directory selection mode
 			if m.cursor == 0 {
-				b.WriteString(selectedStyle.Render("▸ Live Webroot: ") + m.input + "█\n")
-				b.WriteString("  Stage Webroot: " + m.cfg.StagePath + "\n")
+				b.WriteString(promptStyle.Render("Select Live Webroot:") + "\n\n")
 			} else {
-				b.WriteString("  Live Webroot: " + m.cfg.LivePath + "\n")
-				b.WriteString(selectedStyle.Render("▸ Stage Webroot: ") + m.input + "█\n")
+				b.WriteString(promptStyle.Render("Select Stage Webroot:") + "\n\n")
 			}
-			b.WriteString("\n" + dimStyle.Render("Esc to go back to site list"))
+			b.WriteString(dimStyle.Render("Current: "+m.curDir) + "\n\n")
+
+			visible := m.pageSize()
+			if visible > len(m.dirItems) {
+				visible = len(m.dirItems)
+			}
+			start := 0
+			if m.dirCursor >= visible {
+				start = m.dirCursor - visible + 1
+			}
+			end := start + visible
+			if end > len(m.dirItems) {
+				end = len(m.dirItems)
+			}
+
+			for i := start; i < end; i++ {
+				prefix := "  "
+				style := lipgloss.NewStyle()
+				if i == m.dirCursor {
+					prefix = "▸ "
+					style = selectedStyle
+				}
+				b.WriteString(style.Render(prefix+m.dirItems[i]) + "\n")
+			}
+			b.WriteString("\n" + dimStyle.Render("↑/↓ navigate | Enter open folder | Space select current folder | Esc go back"))
 		}
 
 	case stepCredentials:
@@ -595,6 +628,7 @@ func (m model) updatePathsPairs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updatePathsManual(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	last := len(m.dirItems) - 1
 	switch msg.Type {
 	case tea.KeyEsc:
 		if len(m.sitePairs) > 0 {
@@ -602,47 +636,72 @@ func (m model) updatePathsManual(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 			m.input = ""
 		}
-	case tea.KeyTab:
-		if m.cursor == 0 {
-			m.cfg.LivePath = m.input
-			m.cursor = 1
-			m.input = m.cfg.StagePath
-		} else {
-			m.cfg.StagePath = m.input
-			m.cursor = 0
-			m.input = m.cfg.LivePath
+	case tea.KeyUp:
+		if m.dirCursor > 0 {
+			m.dirCursor--
+		}
+	case tea.KeyDown:
+		if m.dirCursor < last {
+			m.dirCursor++
 		}
 	case tea.KeyEnter:
-		if m.cursor == 0 {
-			m.cfg.LivePath = m.input
-			m.cursor = 1
-			m.input = m.cfg.StagePath
+		if len(m.dirItems) == 0 {
+			break
+		}
+		item := m.dirItems[m.dirCursor]
+		if item == ".." {
+			m.curDir = filepath.Dir(m.curDir)
 		} else {
-			m.cfg.StagePath = m.input
-			var err error
-			m.liveWP, err = wpconfig.Parse(m.cfg.LivePath + "/wp-config.php")
-			if err != nil {
-				m.err = fmt.Errorf("live wp-config: %w", err)
-				return m, nil
-			}
-			m.stageWP, err = wpconfig.Parse(m.cfg.StagePath + "/wp-config.php")
-			if err != nil {
-				m.err = fmt.Errorf("stage wp-config: %w", err)
-				return m, nil
-			}
-			m.step = stepCredentials
-			m.cursor = 0
+			m.curDir = filepath.Join(m.curDir, item)
 		}
-	case tea.KeyBackspace:
-		if len(m.input) > 0 {
-			m.input = m.input[:len(m.input)-1]
-		}
+		m = m.readSubdirs()
 	default:
-		if msg.Type == tea.KeyRunes {
-			m.input += string(msg.Runes)
+		if msg.String() == " " {
+			path := m.curDir
+			if m.cursor == 0 {
+				m.cfg.LivePath = path
+				m.cursor = 1
+				m.curDir = filepath.Dir(path)
+				m = m.readSubdirs()
+			} else {
+				m.cfg.StagePath = path
+				var err error
+				m.liveWP, err = wpconfig.Parse(m.cfg.LivePath + "/wp-config.php")
+				if err != nil {
+					m.err = fmt.Errorf("live wp-config: %w", err)
+					m.cursor = 0
+					return m, nil
+				}
+				m.stageWP, err = wpconfig.Parse(m.cfg.StagePath + "/wp-config.php")
+				if err != nil {
+					m.err = fmt.Errorf("stage wp-config: %w", err)
+					m.cursor = 0
+					return m, nil
+				}
+				m.step = stepCredentials
+				m.cursor = 0
+			}
 		}
 	}
 	return m, nil
+}
+
+func (m model) readSubdirs() model {
+	entries, err := os.ReadDir(m.curDir)
+	if err != nil {
+		m.err = err
+		m.dirItems = []string{".."}
+		m.dirCursor = 0
+		return m
+	}
+	m.dirItems = []string{".."}
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			m.dirItems = append(m.dirItems, e.Name())
+		}
+	}
+	m.dirCursor = 0
+	return m
 }
 
 func (m model) updateCredentials(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
