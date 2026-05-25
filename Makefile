@@ -4,7 +4,7 @@ CURRENT_VERSION := $(shell cat $(VERSION_FILE) 2>/dev/null || echo "0.0.0")
 .PHONY: build version release-patch release-minor release-major
 
 build:
-	go build -ldflags "-s -w -X main.version=$(CURRENT_VERSION)" -o wp-sync ./cmd/wp-sync/
+	go build -ldflags "-s -w -X main.version=$(CURRENT_VERSION)" -o wp-stage-sync ./cmd/wp-stage-sync/
 
 version:
 	@echo "Current version: v$(CURRENT_VERSION)"

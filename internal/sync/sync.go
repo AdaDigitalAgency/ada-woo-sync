@@ -9,8 +9,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/export"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/progress"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/export"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/progress"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/wpcli"
 )
 
 // Import executes Step 1: drop all staging tables and import the exported SQL.
@@ -75,21 +76,28 @@ func Import(stageDB *sql.DB, exp *export.Result, log progress.Logger) error {
 	return nil
 }
 
+// DefaultExcludes are the default rsync exclude patterns.
+var DefaultExcludes = []string{
+	"cache",
+	"ewww",
+	"critical-css",
+	"litespeed",
+	"updraft",
+	"archive-master-db",
+}
+
 // FileSync executes Step 2: rsync wp-content and fix ownership.
-func FileSync(livePath, stagePath string, log progress.Logger) error {
+func FileSync(livePath, stagePath string, excludes []string, log progress.Logger) error {
 	src := filepath.Join(livePath, "wp-content") + "/"
 	dst := filepath.Join(stagePath, "wp-content") + "/"
 
 	log.Detail(fmt.Sprintf("rsync %s → %s", src, dst))
-	cmd := exec.Command("rsync", "-a", "--delete",
-		"--exclude=cache",
-		"--exclude=ewww",
-		"--exclude=critical-css",
-		"--exclude=litespeed",
-		"--exclude=updraft",
-		"--exclude=archive-master-db",
-		src, dst,
-	)
+	args := []string{"-a", "--delete"}
+	for _, ex := range excludes {
+		args = append(args, "--exclude="+ex)
+	}
+	args = append(args, src, dst)
+	cmd := exec.Command("rsync", args...)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("rsync: %w", err)
 	}
@@ -107,6 +115,16 @@ func FileSync(livePath, stagePath string, log progress.Logger) error {
 
 // PostProcess executes Step 3: WP-CLI search-replace and cache flush.
 func PostProcess(stagePath, liveDomain, stageDomain string, log progress.Logger) error {
+	wpBase, err := wpcli.Resolve()
+	if err != nil {
+		return fmt.Errorf("wp-cli: %w", err)
+	}
+	wpArgs := func(args ...string) []string {
+		cmd := make([]string, len(wpBase), len(wpBase)+len(args))
+		copy(cmd, wpBase)
+		return append(cmd, args...)
+	}
+
 	hasElementor := dirExists(filepath.Join(stagePath, "wp-content", "plugins", "elementor"))
 	hasJetpack := dirExists(filepath.Join(stagePath, "wp-content", "plugins", "jetpack"))
 
@@ -116,21 +134,21 @@ func PostProcess(stagePath, liveDomain, stageDomain string, log progress.Logger)
 		skip  bool
 	}{
 		{fmt.Sprintf("Search-replace: %s → %s", liveDomain, stageDomain),
-			[]string{"wp", "search-replace",
-				"https://" + liveDomain, "https://" + stageDomain,
-				"--all-tables", "--allow-root", "--path=" + stagePath},
+			wpArgs("search-replace",
+				"https://"+liveDomain, "https://"+stageDomain,
+				"--all-tables", "--allow-root", "--path="+stagePath),
 			false},
 		{"Elementor URL replace",
-			[]string{"wp", "elementor", "replace-urls",
-				"https://" + liveDomain, "https://" + stageDomain,
-				"--allow-root", "--path=" + stagePath},
+			wpArgs("elementor", "replace-urls",
+				"https://"+liveDomain, "https://"+stageDomain,
+				"--allow-root", "--path="+stagePath),
 			!hasElementor},
 		{"Jetpack safe mode",
-			[]string{"wp", "option", "update", "jetpack_safe_mode_confirmed", "1",
-				"--allow-root", "--quiet", "--path=" + stagePath},
+			wpArgs("option", "update", "jetpack_safe_mode_confirmed", "1",
+				"--allow-root", "--quiet", "--path="+stagePath),
 			!hasJetpack},
 		{"Cache flush",
-			[]string{"wp", "cache", "flush", "--allow-root", "--path=" + stagePath},
+			wpArgs("cache", "flush", "--allow-root", "--path="+stagePath),
 			false},
 	}
 

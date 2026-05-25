@@ -3,18 +3,20 @@ package tui
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/config"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/db"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/discovery"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/export"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/guardrail"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/progress"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/sync"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/wpconfig"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/config"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/db"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/discovery"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/export"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/guardrail"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/progress"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/sync"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/wpconfig"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -28,6 +30,7 @@ const (
 	stepCredentials
 	stepSyncParams
 	stepTableSelect
+	stepExcludes
 	stepConfirm
 	stepRunning
 	stepDone
@@ -41,21 +44,23 @@ const (
 )
 
 type model struct {
-	step       step
-	cfg        *config.Config
-	savedCfg   *config.Config // non-nil if config file exists
-	discovered []string
-	sitePairs  []discovery.SitePair
-	pathMode   pathMode
-	liveWP     *wpconfig.WPConfig
-	stageWP    *wpconfig.WPConfig
-	allTables  []string
-	cursor     int
-	input      string
-	err        error
-	status     string
-	width      int
-	height     int
+	step           step
+	cfg            *config.Config
+	savedSites     []config.SavedSite
+	discovered     []string
+	sitePairs      []discovery.SitePair
+	pathMode       pathMode
+	liveWP         *wpconfig.WPConfig
+	stageWP        *wpconfig.WPConfig
+	allTables      []string
+	excludeItems   []string        // wp-content subfolders available for exclusion
+	excludeChecked map[string]bool // true = excluded from rsync
+	cursor         int
+	input          string
+	err            error
+	status         string
+	width          int
+	height         int
 
 	// Progress tracking for stepRunning
 	completedSteps  []string // steps that finished (shown with ✓)
@@ -75,13 +80,13 @@ type stepDoneMsg struct{ msg string }
 type spinTickMsg struct{}
 
 var (
-	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).MarginBottom(1)
-	promptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
-	errorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).MarginBottom(1)
+	promptStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
+	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	successStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	updateStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).MarginTop(1)
+	updateStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).MarginTop(1)
 )
 
 var activeProgram *tea.Program
@@ -102,14 +107,14 @@ func Run(latestVersion string) error {
 }
 
 func initialModel() model {
-	saved, _ := config.Load()
+	sites := config.ListSites()
 	discovered := discovery.Scan()
 	pairs := discovery.PairSites(discovered)
 
 	m := model{
 		discovered: discovered,
 		sitePairs:  pairs,
-		savedCfg:   saved,
+		savedSites: sites,
 		cfg: &config.Config{
 			OrderCount:      100,
 			OrderPreference: "last",
@@ -117,7 +122,7 @@ func initialModel() model {
 		},
 	}
 
-	if saved != nil {
+	if len(sites) > 0 {
 		m.step = stepStartup
 	} else {
 		m.step = stepPaths
@@ -193,6 +198,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateSyncParams(msg)
 		case stepTableSelect:
 			return m.updateTableSelect(msg)
+		case stepExcludes:
+			return m.updateExcludes(msg)
 		case stepConfirm:
 			return m.updateConfirm(msg)
 		case stepDone:
@@ -207,18 +214,51 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) View() string {
 	var b strings.Builder
 
-	b.WriteString(titleStyle.Render("🔄 WP Staging Sync") + "\n\n")
+	if (m.step == stepStartup || m.step == stepPaths) && m.width >= 60 && m.height >= 24 {
+		// Generated using https://patorjk.com/software/taag/#p=display&f=Rebel&t=WP+STAGE%0A+++++++SYNC&x=none&v=4&h=4&w=80&we=false
+		banner := titleStyle.Render(`
+   █████   ███   █████ ███████████      █████████  ███████████   █████████     █████████  ██████████
+  ░░███   ░███  ░░███ ░░███░░░░░███    ███░░░░░███░█░░░███░░░█  ███░░░░░███   ███░░░░░███░░███░░░░░█
+   ░███   ░███   ░███  ░███    ░███   ░███    ░░░ ░   ░███  ░  ░███    ░███  ███     ░░░  ░███  █ ░ 
+   ░███   ░███   ░███  ░██████████    ░░█████████     ░███     ░███████████ ░███          ░██████   
+   ░░███  █████  ███   ░███░░░░░░      ░░░░░░░░███    ░███     ░███░░░░░███ ░███    █████ ░███░░█   
+    ░░░█████░█████░    ░███            ███    ░███    ░███     ░███    ░███ ░░███  ░░███  ░███ ░   █
+      ░░███ ░░███      █████          ░░█████████     █████    █████   █████ ░░█████████  ██████████
+       ░░░   ░░░      ░░░░░            ░░░░░░░░░     ░░░░░    ░░░░░   ░░░░░   ░░░░░░░░░  ░░░░░░░░░░ 
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                         █████████  █████ █████ ██████   █████   █████████                          
+                        ███░░░░░███░░███ ░░███ ░░██████ ░░███   ███░░░░░███                         
+                       ░███    ░░░  ░░███ ███   ░███░███ ░███  ███     ░░░                          
+                       ░░█████████   ░░█████    ░███░░███░███ ░███                                  
+                        ░░░░░░░░███   ░░███     ░███ ░░██████ ░███                                  
+                        ███    ░███    ░███     ░███  ░░█████ ░░███     ███                         
+                       ░░█████████     █████    █████  ░░█████ ░░█████████                          
+                        ░░░░░░░░░     ░░░░░    ░░░░░    ░░░░░   ░░░░░░░░░`) + "\n\n"
+		b.WriteString(banner)
+	} else {
+		b.WriteString(titleStyle.Render("🔄 WP Stage Sync") + "\n\n")
+	}
 
 	switch m.step {
 	case stepStartup:
-		b.WriteString(promptStyle.Render("Saved configuration found.") + "\n\n")
-		options := []string{"Use last settings", "Start over"}
-		for i, opt := range options {
+		b.WriteString(promptStyle.Render("Saved configurations:") + "\n\n")
+		for i, s := range m.savedSites {
+			stageDomain := config.DomainFromPath(s.Config.StagePath)
+			label := fmt.Sprintf("%s  →  %s", s.Domain, stageDomain)
 			if i == m.cursor {
-				b.WriteString(selectedStyle.Render("▸ " + opt) + "\n")
+				b.WriteString(selectedStyle.Render("▸ "+label) + "\n")
 			} else {
-				b.WriteString("  " + opt + "\n")
+				b.WriteString("  " + label + "\n")
 			}
+		}
+		// "Configure new site" option
+		newIdx := len(m.savedSites)
+		if m.cursor == newIdx {
+			b.WriteString(selectedStyle.Render("▸ Configure new site...") + "\n")
+		} else {
+			b.WriteString("  " + dimStyle.Render("Configure new site...") + "\n")
 		}
 
 	case stepPaths:
@@ -323,6 +363,54 @@ func (m model) View() string {
 			b.WriteString(style.Render(fmt.Sprintf("%s%-50s [%s]", prefix, t, mode)) + "\n")
 		}
 
+	case stepExcludes:
+		b.WriteString(promptStyle.Render("Rsync excludes (wp-content/):") + "\n")
+		b.WriteString(dimStyle.Render("Space to toggle, Enter to confirm, Esc to go back") + "\n\n")
+
+		// Viewport
+		visible := m.pageSize()
+		if visible > len(m.excludeItems) {
+			visible = len(m.excludeItems)
+		}
+		start := 0
+		if m.cursor >= visible {
+			start = m.cursor - visible + 1
+		}
+		end := start + visible
+		if end > len(m.excludeItems) {
+			end = len(m.excludeItems)
+		}
+
+		// Build a set of what exists on disk for annotation
+		wpContentPath := filepath.Join(m.cfg.LivePath, "wp-content")
+		for i := start; i < end; i++ {
+			item := m.excludeItems[i]
+			prefix := "  "
+			style := lipgloss.NewStyle()
+			if i == m.cursor {
+				prefix = "▸ "
+				style = selectedStyle
+			}
+			check := "[ ]"
+			if m.excludeChecked[item] {
+				check = "[x]"
+			}
+			label := fmt.Sprintf("%s%s %s", prefix, check, item)
+			// Annotate items not on disk
+			if _, err := os.Stat(filepath.Join(wpContentPath, item)); err != nil {
+				label += dimStyle.Render(" (not found)")
+			}
+			b.WriteString(style.Render(label) + "\n")
+		}
+
+		excluded := 0
+		for _, v := range m.excludeChecked {
+			if v {
+				excluded++
+			}
+		}
+		b.WriteString("\n" + dimStyle.Render(fmt.Sprintf("%d/%d excluded", excluded, len(m.excludeItems))))
+
 	case stepConfirm:
 		b.WriteString(promptStyle.Render("Ready to sync?") + "\n\n")
 		b.WriteString(fmt.Sprintf("  Live:  %s\n", m.cfg.LivePath))
@@ -369,7 +457,7 @@ func (m model) View() string {
 		}
 		b.WriteString("\n")
 		if m.err != nil {
-			b.WriteString(errorStyle.Render("✗ Sync failed: " + m.err.Error()) + "\n")
+			b.WriteString(errorStyle.Render("✗ Sync failed: "+m.err.Error()) + "\n")
 		} else {
 			duration := syncCompletedAt.Sub(syncStartedAt).Truncate(time.Second)
 			b.WriteString(successStyle.Render(fmt.Sprintf("✓ Sync complete! (took %s)", duration)) + "\n")
@@ -382,7 +470,7 @@ func (m model) View() string {
 	}
 
 	if m.updateAvailable != "" {
-		b.WriteString("\n" + updateStyle.Render(fmt.Sprintf("Update available: v%s → run 'wp-sync --update'", m.updateAvailable)))
+		b.WriteString("\n" + updateStyle.Render(fmt.Sprintf("Update available: v%s → run 'wp-stage-sync --update'", m.updateAvailable)))
 	}
 
 	return b.String()
@@ -391,37 +479,38 @@ func (m model) View() string {
 // --- Step handlers ---
 
 func (m model) updateStartup(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	maxIdx := len(m.savedSites) // includes "Configure new site"
 	switch msg.Type {
 	case tea.KeyUp:
 		if m.cursor > 0 {
 			m.cursor--
 		}
 	case tea.KeyDown:
-		if m.cursor < 1 {
+		if m.cursor < maxIdx {
 			m.cursor++
 		}
 	case tea.KeyEnter:
-		if m.cursor == 0 {
-			// Use saved config
-			m.cfg = m.savedCfg
-			m.step = stepCredentials
-			m.cursor = 0
-			// Parse wp-configs
-			var err error
-			m.liveWP, err = wpconfig.Parse(m.cfg.LivePath + "/wp-config.php")
-			if err != nil {
-				m.err = err
-				return m, nil
-			}
-			m.stageWP, err = wpconfig.Parse(m.cfg.StagePath + "/wp-config.php")
-			if err != nil {
-				m.err = err
-				return m, nil
-			}
-		} else {
+		if m.cursor == len(m.savedSites) {
+			// Configure new site
 			m.step = stepPaths
 			m.cursor = 0
 			m.input = ""
+			return m, nil
+		}
+		// Use saved site config
+		m.cfg = m.savedSites[m.cursor].Config
+		m.step = stepCredentials
+		m.cursor = 0
+		var err error
+		m.liveWP, err = wpconfig.Parse(m.cfg.LivePath + "/wp-config.php")
+		if err != nil {
+			m.err = err
+			return m, nil
+		}
+		m.stageWP, err = wpconfig.Parse(m.cfg.StagePath + "/wp-config.php")
+		if err != nil {
+			m.err = err
+			return m, nil
 		}
 	}
 	return m, nil
@@ -457,6 +546,10 @@ func (m model) updatePathsPairs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if pair.StagePath == "" {
 			m.err = fmt.Errorf("no staging site found for %s — use Custom paths", pair.Domain)
 			return m, nil
+		}
+		// Try to load saved config for this domain
+		if saved, err := config.Load(pair.Domain); err == nil {
+			m.cfg = saved
 		}
 		m.cfg.LivePath = pair.LivePath
 		m.cfg.StagePath = pair.StagePath
@@ -601,11 +694,16 @@ func (m model) updateSyncParams(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) updateTableSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	pageSize := m.height - 10
-	if pageSize < 5 {
-		pageSize = 5
+func (m model) pageSize() int {
+	p := m.height - 10
+	if p < 5 {
+		p = 5
 	}
+	return p
+}
+
+func (m model) updateTableSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	pageSize := m.pageSize()
 	last := len(m.allTables) - 1
 
 	switch msg.Type {
@@ -640,6 +738,99 @@ func (m model) updateTableSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.cfg.TableModes[t] = cycleMode(m.cfg.TableModes[t])
 	case tea.KeyEnter:
+		m.excludeItems, m.excludeChecked = buildExcludeList(m.cfg)
+		m.step = stepExcludes
+		m.cursor = 0
+	}
+	return m, nil
+}
+
+func buildExcludeList(cfg *config.Config) ([]string, map[string]bool) {
+	// Scan wp-content for subdirectories
+	wpContentPath := filepath.Join(cfg.LivePath, "wp-content")
+	entries, _ := os.ReadDir(wpContentPath)
+
+	var items []string
+	for _, e := range entries {
+		if e.IsDir() {
+			items = append(items, e.Name())
+		}
+	}
+
+	// Build checked map: start with defaults, then overlay saved config
+	checked := make(map[string]bool)
+	if len(cfg.RsyncExcludes) > 0 {
+		// Use saved excludes
+		for _, ex := range cfg.RsyncExcludes {
+			checked[ex] = true
+		}
+	} else {
+		// Use defaults — only check items that actually exist
+		for _, def := range sync.DefaultExcludes {
+			for _, item := range items {
+				if item == def {
+					checked[def] = true
+					break
+				}
+			}
+		}
+	}
+
+	// Make sure all defaults appear in the list even if not on disk (for awareness)
+	existing := make(map[string]bool, len(items))
+	for _, item := range items {
+		existing[item] = true
+	}
+	for _, def := range sync.DefaultExcludes {
+		if !existing[def] {
+			items = append(items, def)
+		}
+	}
+
+	return items, checked
+}
+
+func (m model) updateExcludes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	last := len(m.excludeItems) - 1
+	switch msg.Type {
+	case tea.KeyEscape:
+		m.step = stepTableSelect
+		m.cursor = 0
+		return m, nil
+	case tea.KeyUp:
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case tea.KeyDown:
+		if m.cursor < last {
+			m.cursor++
+		}
+	case tea.KeyPgUp:
+		m.cursor -= m.pageSize()
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+	case tea.KeyPgDown:
+		m.cursor += m.pageSize()
+		if m.cursor > last {
+			m.cursor = last
+		}
+	case tea.KeyHome:
+		m.cursor = 0
+	case tea.KeyEnd:
+		m.cursor = last
+	case tea.KeySpace:
+		item := m.excludeItems[m.cursor]
+		m.excludeChecked[item] = !m.excludeChecked[item]
+	case tea.KeyEnter:
+		// Save checked items to config
+		var excludes []string
+		for _, item := range m.excludeItems {
+			if m.excludeChecked[item] {
+				excludes = append(excludes, item)
+			}
+		}
+		m.cfg.RsyncExcludes = excludes
 		m.step = stepConfirm
 		m.cursor = 0
 	}
@@ -649,7 +840,7 @@ func (m model) updateTableSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEscape:
-		m.step = stepTableSelect
+		m.step = stepExcludes
 		m.cursor = 0
 		return m, nil
 	case tea.KeyEnter:
@@ -713,7 +904,7 @@ func runSync(cfg *config.Config, liveWP, stageWP *wpconfig.WPConfig, p *tea.Prog
 	log.StepDone("Import complete")
 
 	log.Step("Syncing files")
-	if err := sync.FileSync(cfg.LivePath, cfg.StagePath, log); err != nil {
+	if err := sync.FileSync(cfg.LivePath, cfg.StagePath, cfg.RsyncExcludes, log); err != nil {
 		return fmt.Errorf("file sync: %w", err)
 	}
 	log.StepDone("File sync complete")

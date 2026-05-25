@@ -1,4 +1,4 @@
-# ADA WooCommerce Sync
+# WP Stage Sync
 
 A TUI (Terminal User Interface) tool to synchronize a live WordPress/WooCommerce site to a staging environment. Built for HPOS-enabled stores.
 
@@ -24,13 +24,13 @@ A TUI (Terminal User Interface) tool to synchronize a live WordPress/WooCommerce
 ### Quick install (Linux)
 
 ```bash
-curl -sL "https://github.com/AdaDigitalAgency/ada-woo-sync/releases/latest/download/wp-sync_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" -o /tmp/wp-sync && chmod +x /tmp/wp-sync && sudo mv /tmp/wp-sync /usr/local/bin/wp-sync
+curl -sL "https://github.com/AdaDigitalAgency/wp-stage-sync/releases/latest/download/wp-stage-sync_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" -o /tmp/wp-stage-sync && chmod +x /tmp/wp-stage-sync && sudo mv /tmp/wp-stage-sync /usr/local/bin/wp-stage-sync
 ```
 
 ### From source
 
 ```bash
-go install github.com/AdaDigitalAgency/ada-woo-sync/cmd/wp-sync@latest
+go install github.com/AdaDigitalAgency/wp-stage-sync/cmd/wp-stage-sync@latest
 ```
 
 ## Usage
@@ -38,7 +38,7 @@ go install github.com/AdaDigitalAgency/ada-woo-sync/cmd/wp-sync@latest
 ### Interactive mode (TUI)
 
 ```bash
-wp-sync
+wp-stage-sync
 ```
 
 Walks you through:
@@ -49,12 +49,12 @@ Walks you through:
 4. **Table selector** — choose sync mode per table (Structure & Data / Structure Only / Ignore / Custom Rule)
 5. **Confirm & sync**
 
-Settings are saved to `~/.wp-sync.json` for reuse.
+Settings are saved to `~/.config/wp-stage-sync/sites/` for reuse.
 
 ### Unattended mode
 
 ```bash
-wp-sync -u
+wp-stage-sync -u
 ```
 
 Skips the TUI, reads saved config, and runs the sync immediately. Useful for cron jobs or scripts.
@@ -62,13 +62,13 @@ Skips the TUI, reads saved config, and runs the sync immediately. Useful for cro
 ### Version check
 
 ```bash
-wp-sync --version
+wp-stage-sync --version
 ```
 
 ### Self-update
 
 ```bash
-wp-sync --update
+wp-stage-sync --update
 ```
 
 Downloads the latest release from GitHub and replaces the binary in-place.
@@ -118,9 +118,9 @@ The tool has built-in production guardrails:
 ## Project structure
 
 ```
-cmd/wp-sync/main.go          Entry point, CLI flags, unattended orchestration
+cmd/wp-stage-sync/main.go          Entry point, CLI flags, unattended orchestration
 internal/
-├── config/config.go          JSON config persistence (~/.wp-sync.json)
+├── config/config.go          JSON config persistence (~/.config/wp-stage-sync/sites/)
 ├── db/db.go                  DB connection (root socket → wp-config fallback)
 ├── discovery/discovery.go    Apache2 vhost + filesystem auto-discovery
 ├── export/export.go          Core export engine (orders, users, HPOS, base)

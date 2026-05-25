@@ -1,4 +1,4 @@
-module github.com/AdaDigitalAgency/ada-woo-sync
+module github.com/AdaDigitalAgency/wp-stage-sync
 
 go 1.26.3
 

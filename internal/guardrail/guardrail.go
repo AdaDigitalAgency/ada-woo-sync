@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/wpconfig"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/wpconfig"
 )
 
 // ValidatePaths ensures live and stage paths are different.

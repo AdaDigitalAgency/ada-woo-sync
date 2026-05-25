@@ -24,19 +24,19 @@ jobs:
           LDFLAGS="-s -w -X main.version=${VERSION}"
 
           # Linux amd64 (primary target — servers)
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o wp-sync_linux_amd64 ./cmd/wp-sync/
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o wp-stage-sync_linux_amd64 ./cmd/wp-stage-sync/
           
           # Linux arm64
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o wp-sync_linux_arm64 ./cmd/wp-sync/
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o wp-stage-sync_linux_arm64 ./cmd/wp-stage-sync/
 
       - name: Generate checksums
-        run: sha256sum wp-sync_* > checksums.txt
+        run: sha256sum wp-stage-sync_* > checksums.txt
 
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: |
-            wp-sync_linux_amd64
-            wp-sync_linux_arm64
+            wp-stage-sync_linux_amd64
+            wp-stage-sync_linux_arm64
             checksums.txt

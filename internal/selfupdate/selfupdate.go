@@ -15,7 +15,7 @@ import (
 
 const (
 	repoOwner = "AdaDigitalAgency"
-	repoName  = "ada-woo-sync"
+	repoName  = "wp-stage-sync"
 )
 
 func Update(currentVersion string) error {
@@ -104,7 +104,7 @@ func statePath() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".config", "wp-sync", ".internal")
+	return filepath.Join(home, ".config", "wp-stage-sync", ".internal")
 }
 
 func loadState() *internalState {

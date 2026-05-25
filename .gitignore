@@ -1,5 +1,5 @@
 # Binaries
-/wp-sync
+/wp-stage-sync
 *.exe
 
 # IDE

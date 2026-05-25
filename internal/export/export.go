@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/config"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/progress"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/config"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/progress"
 )
 
 // Result holds all generated SQL grouped by category.
@@ -118,9 +118,12 @@ func Run(liveDB *sql.DB, prefix string, cfg *config.Config, log progress.Logger)
 		log.Progress(tableDone, totalTables)
 	}
 
-	// 5. Custom rule: HPOS & order tables
+	// 5. Custom rule: HPOS & order tables (skip if not present — pre-HPOS WooCommerce)
 	for t, col := range customOrderTables {
 		full := prefix + t
+		if !tableSet[full] {
+			continue
+		}
 		log.Detail(fmt.Sprintf("Orders: %s", full))
 		ddl, err := getCreateTable(liveDB, full)
 		if err != nil {
@@ -138,12 +141,12 @@ func Run(liveDB *sql.DB, prefix string, cfg *config.Config, log progress.Logger)
 	}
 
 	// 5b. woocommerce_order_itemmeta filtered by order_item_id from order_items
-	log.Detail("Resolving order item IDs for itemmeta")
-	orderItemIDs, err := getOrderItemIDs(liveDB, prefix, orderIDs)
-	if err != nil {
-		return nil, fmt.Errorf("order item IDs: %w", err)
-	}
-	{
+	if tableSet[prefix+"woocommerce_order_itemmeta"] {
+		log.Detail("Resolving order item IDs for itemmeta")
+		orderItemIDs, err := getOrderItemIDs(liveDB, prefix, orderIDs)
+		if err != nil {
+			return nil, fmt.Errorf("order item IDs: %w", err)
+		}
 		full := prefix + "woocommerce_order_itemmeta"
 		log.Detail(fmt.Sprintf("Orders: %s (%d items)", full, len(orderItemIDs)))
 		ddl, err := getCreateTable(liveDB, full)

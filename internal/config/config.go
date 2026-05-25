@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type TableMode string
@@ -22,6 +23,7 @@ type Config struct {
 	OrderCount      int                  `json:"order_count"`
 	OrderPreference string               `json:"order_preference"` // "last" or "first"
 	TableModes      map[string]TableMode `json:"table_modes"`
+	RsyncExcludes   []string             `json:"rsync_excludes,omitempty"`
 }
 
 func configDir() (string, error) {
@@ -29,20 +31,33 @@ func configDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".config", "wp-sync"), nil
+	return filepath.Join(home, ".config", "wp-stage-sync"), nil
 }
 
-func configPath() (string, error) {
+func sitesDir() (string, error) {
 	dir, err := configDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "config.json"), nil
+	return filepath.Join(dir, "sites"), nil
 }
 
-func Load() (*Config, error) {
-	migrateOldConfig()
-	p, err := configPath()
+// DomainFromPath extracts the domain from a webroot path.
+func DomainFromPath(webroot string) string {
+	return filepath.Base(strings.TrimRight(webroot, "/"))
+}
+
+func siteConfigPath(domain string) (string, error) {
+	dir, err := sitesDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, domain+".json"), nil
+}
+
+// Load reads the config for a specific domain.
+func Load(domain string) (*Config, error) {
+	p, err := siteConfigPath(domain)
 	if err != nil {
 		return nil, err
 	}
@@ -57,45 +72,20 @@ func Load() (*Config, error) {
 	return &cfg, nil
 }
 
-func migrateOldConfig() {
-	newPath, err := configPath()
-	if err != nil {
-		return
-	}
-	if _, err := os.Stat(newPath); err == nil {
-		return // new location already exists
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
-	oldPath := filepath.Join(home, ".wp-sync.json")
-	if _, err := os.Stat(oldPath); err != nil {
-		return // no old file either
-	}
-	dir, _ := configDir()
-	_ = os.MkdirAll(dir, 0755)
-	if err := os.Rename(oldPath, newPath); err != nil {
-		// Fall back to copy+delete if rename fails (cross-device)
-		data, err := os.ReadFile(oldPath)
-		if err != nil {
-			return
-		}
-		if os.WriteFile(newPath, data, 0644) == nil {
-			os.Remove(oldPath)
-		}
-	}
-}
-
+// Save writes the config, deriving the domain from LivePath.
 func Save(cfg *Config) error {
-	dir, err := configDir()
+	domain := DomainFromPath(cfg.LivePath)
+	if domain == "" || domain == "." {
+		return fmt.Errorf("cannot derive domain from live path: %s", cfg.LivePath)
+	}
+	dir, err := sitesDir()
 	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	p, err := configPath()
+	p, err := siteConfigPath(domain)
 	if err != nil {
 		return err
 	}
@@ -104,4 +94,35 @@ func Save(cfg *Config) error {
 		return err
 	}
 	return os.WriteFile(p, data, 0644)
+}
+
+// SavedSite represents a saved per-site configuration.
+type SavedSite struct {
+	Domain string
+	Config *Config
+}
+
+// ListSites returns all saved site configurations.
+func ListSites() []SavedSite {
+	dir, err := sitesDir()
+	if err != nil {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var sites []SavedSite
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		domain := strings.TrimSuffix(e.Name(), ".json")
+		cfg, err := Load(domain)
+		if err != nil {
+			continue
+		}
+		sites = append(sites, SavedSite{Domain: domain, Config: cfg})
+	}
+	return sites
 }

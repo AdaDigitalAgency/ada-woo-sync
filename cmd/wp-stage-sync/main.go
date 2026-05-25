@@ -6,16 +6,16 @@ import (
 	"os"
 	"time"
 
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/config"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/db"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/discovery"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/export"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/guardrail"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/progress"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/selfupdate"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/sync"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/tui"
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/wpconfig"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/config"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/db"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/discovery"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/export"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/guardrail"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/progress"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/selfupdate"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/sync"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/tui"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/wpconfig"
 )
 
 // Set via -ldflags at build time
@@ -27,10 +27,11 @@ func main() {
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.BoolVar(showVersion, "v", false, "Print version and exit")
 	doUpdate := flag.Bool("update", false, "Update to the latest version")
+	siteFlag := flag.String("site", "", "Site domain to sync (for multi-site servers)")
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("wp-sync %s\n", version)
+		fmt.Printf("wp-stage-sync %s\n", version)
 		return
 	}
 
@@ -46,9 +47,9 @@ func main() {
 
 	if *unattended {
 		if latestVersion != "" {
-			fmt.Fprintf(os.Stderr, "\033[33mUpdate available: v%s → v%s. Run 'wp-sync --update' to upgrade.\033[0m\n", version, latestVersion)
+			fmt.Fprintf(os.Stderr, "\033[33mUpdate available: v%s → v%s. Run 'wp-stage-sync --update' to upgrade.\033[0m\n", version, latestVersion)
 		}
-		if err := runUnattended(); err != nil {
+		if err := runUnattended(*siteFlag); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -61,16 +62,34 @@ func main() {
 	}
 }
 
-func runUnattended() error {
+func runUnattended(siteDomain string) error {
 	log := progress.NewCLILogger()
 	started := time.Now()
 
-	log.Step("Loading saved configuration")
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("no saved config found: %w", err)
+	// Resolve which site config to use
+	sites := config.ListSites()
+	var cfg *config.Config
+
+	switch {
+	case siteDomain != "":
+		var err error
+		cfg, err = config.Load(siteDomain)
+		if err != nil {
+			return fmt.Errorf("no saved config for site %q: %w", siteDomain, err)
+		}
+	case len(sites) == 1:
+		cfg = sites[0].Config
+	case len(sites) > 1:
+		fmt.Fprintf(os.Stderr, "Multiple sites configured. Use --site to specify which one:\n")
+		for _, s := range sites {
+			fmt.Fprintf(os.Stderr, "  --site %s\n", s.Domain)
+		}
+		return fmt.Errorf("--site flag required when multiple sites are configured")
+	default:
+		return fmt.Errorf("no saved config found — run wp-stage-sync interactively first")
 	}
-	log.Detail(fmt.Sprintf("Live: %s", cfg.LivePath))
+
+	log.Detail(fmt.Sprintf("Site: %s", config.DomainFromPath(cfg.LivePath)))
 	log.Detail(fmt.Sprintf("Stage: %s", cfg.StagePath))
 
 	log.Step("Parsing wp-config files")
@@ -120,7 +139,11 @@ func runUnattended() error {
 
 	// Step 2: File sync
 	log.Step("Syncing files")
-	if err := sync.FileSync(cfg.LivePath, cfg.StagePath, log); err != nil {
+	excludes := cfg.RsyncExcludes
+	if len(excludes) == 0 {
+		excludes = sync.DefaultExcludes
+	}
+	if err := sync.FileSync(cfg.LivePath, cfg.StagePath, excludes, log); err != nil {
 		return fmt.Errorf("file sync: %w", err)
 	}
 	log.StepDone("File sync complete")

@@ -3,10 +3,11 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "github.com/go-sql-driver/mysql"
 
-	"github.com/AdaDigitalAgency/ada-woo-sync/internal/wpconfig"
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/wpconfig"
 )
 
 // Connect establishes connections to both live and stage databases.
@@ -25,48 +26,66 @@ func Connect(liveWP, stageWP *wpconfig.WPConfig) (*sql.DB, *sql.DB, error) {
 }
 
 func connect(wp *wpconfig.WPConfig) (*sql.DB, error) {
+	// Parse DB_HOST: WordPress supports "host", "host:port", and "localhost:/path/to/socket"
+	host := wp.DBHost
+	port := "3306"
+	var explicitSocket string
+
+	if strings.Contains(host, ":") {
+		parts := strings.SplitN(host, ":", 2)
+		if strings.HasPrefix(parts[1], "/") {
+			// Format: localhost:/path/to/socket
+			explicitSocket = parts[1]
+			host = parts[0]
+		} else {
+			// Format: host:port
+			host = parts[0]
+			port = parts[1]
+		}
+	}
+
+	// 1. If DB_HOST specified a socket path, try it first
+	if explicitSocket != "" {
+		dsn := fmt.Sprintf("%s:%s@unix(%s)/%s?multiStatements=true",
+			wp.DBUser, wp.DBPassword, explicitSocket, wp.DBName)
+		if db, err := tryConnect(dsn); err == nil {
+			return db, nil
+		}
+	}
+
 	socketPaths := []string{
 		"/var/run/mysqld/mysqld.sock",
+		"/run/mysqld/mysqld.sock",     // Debian/MariaDB
 		"/var/lib/mysql/mysql.sock",
 		"/tmp/mysql.sock",
+		"/var/run/mysql/mysql.sock",   // Some RHEL
 	}
 
-	// Try wp-config credentials via unix socket first (matches how WP itself connects)
-	for _, sock := range socketPaths {
-		dsn := fmt.Sprintf("%s:%s@unix(%s)/%s?multiStatements=true",
-			wp.DBUser, wp.DBPassword, sock, wp.DBName)
-		db, err := sql.Open("mysql", dsn)
-		if err != nil {
-			continue
+	// 2. Try wp-config credentials via common unix sockets (only for local hosts)
+	if host == "localhost" || host == "127.0.0.1" || host == "" {
+		for _, sock := range socketPaths {
+			dsn := fmt.Sprintf("%s:%s@unix(%s)/%s?multiStatements=true",
+				wp.DBUser, wp.DBPassword, sock, wp.DBName)
+			if db, err := tryConnect(dsn); err == nil {
+				return db, nil
+			}
 		}
-		if err := db.Ping(); err != nil {
-			db.Close()
-			continue
+
+		// 3. Try root via socket (passwordless)
+		for _, sock := range socketPaths {
+			dsn := fmt.Sprintf("root@unix(%s)/%s?multiStatements=true", sock, wp.DBName)
+			if db, err := tryConnect(dsn); err == nil {
+				return db, nil
+			}
 		}
-		return db, nil
 	}
 
-	// Try root via socket (passwordless)
-	for _, sock := range socketPaths {
-		dsn := fmt.Sprintf("root@unix(%s)/%s?multiStatements=true", sock, wp.DBName)
-		db, err := sql.Open("mysql", dsn)
-		if err != nil {
-			continue
-		}
-		if err := db.Ping(); err != nil {
-			db.Close()
-			continue
-		}
-		return db, nil
-	}
-
-	// Fall back to TCP — force IPv4 when host is "localhost" to avoid ::1 issues
-	host := wp.DBHost
-	if host == "localhost" {
+	// 4. Fall back to TCP — force IPv4 when host is "localhost" to avoid ::1 issues
+	if host == "localhost" || host == "" {
 		host = "127.0.0.1"
 	}
-	dsn := fmt.Sprintf("%s:%s@tcp(%s)/%s?multiStatements=true",
-		wp.DBUser, wp.DBPassword, host, wp.DBName)
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?multiStatements=true",
+		wp.DBUser, wp.DBPassword, host, port, wp.DBName)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening connection: %w", err)
@@ -74,6 +93,18 @@ func connect(wp *wpconfig.WPConfig) (*sql.DB, error) {
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("pinging: %w", err)
+	}
+	return db, nil
+}
+
+func tryConnect(dsn string) (*sql.DB, error) {
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, err
 	}
 	return db, nil
 }
