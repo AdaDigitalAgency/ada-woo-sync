@@ -22,6 +22,7 @@ type Config struct {
 	StagePath       string               `json:"stage_path"`
 	OrderCount      int                  `json:"order_count"`
 	OrderPreference string               `json:"order_preference"` // "last" or "first"
+	Anonymize       bool                 `json:"anonymize"`
 	TableModes      map[string]TableMode `json:"table_modes"`
 	RsyncExcludes   []string             `json:"rsync_excludes,omitempty"`
 }

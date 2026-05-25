@@ -314,24 +314,37 @@ func (m model) View() string {
 
 	case stepSyncParams:
 		b.WriteString(promptStyle.Render("Sync parameters:") + "\n\n")
+
+		// 1. Order Count
 		if m.cursor == 0 {
 			b.WriteString(selectedStyle.Render("▸ Order Count: ") + m.input + "█\n")
-			pref := "Last N"
-			if m.cfg.OrderPreference == "first" {
-				pref = "First N"
-			}
-			b.WriteString("  Order Preference: " + pref + "\n")
 		} else {
 			b.WriteString(fmt.Sprintf("  Order Count: %d\n", m.cfg.OrderCount))
-			options := []string{"Last N", "First N"}
-			for i, opt := range options {
-				marker := "  "
-				if (i == 0 && m.cfg.OrderPreference == "last") || (i == 1 && m.cfg.OrderPreference == "first") {
-					marker = "● "
-				}
-				b.WriteString("  " + marker + opt + "\n")
-			}
 		}
+
+		// 2. Order Preference
+		pref := "Last N"
+		if m.cfg.OrderPreference == "first" {
+			pref = "First N"
+		}
+		if m.cursor == 1 {
+			b.WriteString(selectedStyle.Render("▸ Order Preference: ") + selectedStyle.Render(pref) + " (Press ↑/↓ to toggle)\n")
+		} else {
+			b.WriteString("  Order Preference: " + pref + "\n")
+		}
+
+		// 3. Anonymize Customers
+		anonText := "No"
+		if m.cfg.Anonymize {
+			anonText = "Yes"
+		}
+		if m.cursor == 2 {
+			b.WriteString(selectedStyle.Render("▸ Anonymize Customers: ") + selectedStyle.Render(anonText) + " (Press ↑/↓ to toggle)\n")
+		} else {
+			b.WriteString("  Anonymize Customers: " + anonText + "\n")
+		}
+
+		b.WriteString("\n" + dimStyle.Render("Tab to switch fields, Enter to confirm"))
 
 	case stepTableSelect:
 		b.WriteString(promptStyle.Render("Table sync modes:") + "\n")
@@ -381,8 +394,6 @@ func (m model) View() string {
 			end = len(m.excludeItems)
 		}
 
-		// Build a set of what exists on disk for annotation
-		wpContentPath := filepath.Join(m.cfg.LivePath, "wp-content")
 		for i := start; i < end; i++ {
 			item := m.excludeItems[i]
 			prefix := "  "
@@ -396,10 +407,6 @@ func (m model) View() string {
 				check = "[x]"
 			}
 			label := fmt.Sprintf("%s%s %s", prefix, check, item)
-			// Annotate items not on disk
-			if _, err := os.Stat(filepath.Join(wpContentPath, item)); err != nil {
-				label += dimStyle.Render(" (not found)")
-			}
 			b.WriteString(style.Render(label) + "\n")
 		}
 
@@ -415,7 +422,24 @@ func (m model) View() string {
 		b.WriteString(promptStyle.Render("Ready to sync?") + "\n\n")
 		b.WriteString(fmt.Sprintf("  Live:  %s\n", m.cfg.LivePath))
 		b.WriteString(fmt.Sprintf("  Stage: %s\n", m.cfg.StagePath))
-		b.WriteString(fmt.Sprintf("  Orders: %d (%s)\n", m.cfg.OrderCount, m.cfg.OrderPreference))
+
+		// Check if WooCommerce tables exist
+		hasWoo := false
+		for _, t := range m.allTables {
+			if t == m.liveWP.TablePrefix+"wc_orders" || t == m.liveWP.TablePrefix+"woocommerce_order_items" {
+				hasWoo = true
+				break
+			}
+		}
+		if hasWoo {
+			anonText := "no"
+			if m.cfg.Anonymize {
+				anonText = "yes"
+			}
+			b.WriteString(fmt.Sprintf("  Orders: %d (%s, anonymize: %s)\n", m.cfg.OrderCount, m.cfg.OrderPreference, anonText))
+		} else {
+			b.WriteString("  WooCommerce: not installed (full WordPress sync)\n")
+		}
 		b.WriteString("\n" + dimStyle.Render("Press Enter to start, Esc to go back"))
 
 	case stepRunning:
@@ -623,9 +647,42 @@ func (m model) updatePathsManual(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) updateCredentials(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyEnter {
-		m.step = stepSyncParams
-		m.cursor = 0
-		m.input = fmt.Sprintf("%d", m.cfg.OrderCount)
+		liveDB, _, err := db.Connect(m.liveWP, m.stageWP)
+		if err != nil {
+			m.err = fmt.Errorf("connecting to DB: %w", err)
+			return m, nil
+		}
+		tables, err := queryTables(liveDB)
+		liveDB.Close()
+		if err != nil {
+			m.err = fmt.Errorf("listing tables: %w", err)
+			return m, nil
+		}
+		m.allTables = tables
+
+		// Check both plugin directory and DB tables
+		wooPluginPath := filepath.Join(m.cfg.LivePath, "wp-content", "plugins", "woocommerce")
+		info, errStat := os.Stat(wooPluginPath)
+		hasWoo := errStat == nil && info.IsDir()
+
+		if !hasWoo {
+			for _, t := range tables {
+				if t == m.liveWP.TablePrefix+"wc_orders" || t == m.liveWP.TablePrefix+"woocommerce_order_items" {
+					hasWoo = true
+					break
+				}
+			}
+		}
+
+		if hasWoo {
+			m.step = stepSyncParams
+			m.cursor = 0
+			m.input = fmt.Sprintf("%d", m.cfg.OrderCount)
+		} else {
+			m.step = stepTableSelect
+			m.cursor = 0
+			applyDefaultModes(m.cfg, tables, m.liveWP.TablePrefix)
+		}
 	}
 	return m, nil
 }
@@ -641,6 +698,8 @@ func (m model) updateSyncParams(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.cfg.OrderCount = n
 			m.cursor = 1
+		} else if m.cursor == 1 {
+			m.cursor = 2
 		} else {
 			m.cursor = 0
 			m.input = fmt.Sprintf("%d", m.cfg.OrderCount)
@@ -654,25 +713,12 @@ func (m model) updateSyncParams(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.cfg.OrderCount = n
 			m.cursor = 1
+		} else if m.cursor == 1 {
+			m.cursor = 2
 		} else {
-			// Move to table selection — need DB connection
 			m.step = stepTableSelect
 			m.cursor = 0
-			liveDB, _, err := db.Connect(m.liveWP, m.stageWP)
-			if err != nil {
-				m.err = fmt.Errorf("connecting to DB: %w", err)
-				m.step = stepSyncParams
-				return m, nil
-			}
-			tables, err := queryTables(liveDB)
-			liveDB.Close()
-			if err != nil {
-				m.err = fmt.Errorf("listing tables: %w", err)
-				m.step = stepSyncParams
-				return m, nil
-			}
-			m.allTables = tables
-			applyDefaultModes(m.cfg, tables, m.liveWP.TablePrefix)
+			applyDefaultModes(m.cfg, m.allTables, m.liveWP.TablePrefix)
 		}
 	case tea.KeyUp, tea.KeyDown:
 		if m.cursor == 1 {
@@ -681,6 +727,8 @@ func (m model) updateSyncParams(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.cfg.OrderPreference = "last"
 			}
+		} else if m.cursor == 2 {
+			m.cfg.Anonymize = !m.cfg.Anonymize
 		}
 	case tea.KeyBackspace:
 		if m.cursor == 0 && len(m.input) > 0 {
@@ -773,17 +821,6 @@ func buildExcludeList(cfg *config.Config) ([]string, map[string]bool) {
 					break
 				}
 			}
-		}
-	}
-
-	// Make sure all defaults appear in the list even if not on disk (for awareness)
-	existing := make(map[string]bool, len(items))
-	for _, item := range items {
-		existing[item] = true
-	}
-	for _, def := range sync.DefaultExcludes {
-		if !existing[def] {
-			items = append(items, def)
 		}
 	}
 
@@ -902,6 +939,14 @@ func runSync(cfg *config.Config, liveWP, stageWP *wpconfig.WPConfig, p *tea.Prog
 		return fmt.Errorf("import: %w", err)
 	}
 	log.StepDone("Import complete")
+
+	if cfg.Anonymize {
+		log.Step("Anonymizing customer data")
+		if err := sync.Anonymize(stageDB, liveWP.TablePrefix, log); err != nil {
+			return fmt.Errorf("anonymize: %w", err)
+		}
+		log.StepDone("Anonymization complete")
+	}
 
 	log.Step("Syncing files")
 	if err := sync.FileSync(cfg.LivePath, cfg.StagePath, cfg.RsyncExcludes, log); err != nil {

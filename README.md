@@ -1,14 +1,17 @@
 # WP Stage Sync
 
-A TUI (Terminal User Interface) tool to synchronize a live WordPress/WooCommerce site to a staging environment. Built for HPOS-enabled stores.
+A TUI (Terminal User Interface) tool to synchronize a live WordPress site to a staging environment. It automatically detects if WooCommerce is installed to selectively filter orders and optionally anonymize customer data, while supporting clean full WordPress synchronization.
 
 ## What it does
 
-- Copies your production WordPress database to staging with **filtered order data** — only the N orders you specify, not the entire order history
-- Keeps all non-customer users (admins, editors, shop managers) intact
-- Syncs `wp-content/` via rsync
-- Runs search-replace for domain URLs automatically
-- **Never writes to production** — read-only access to the live database, all mutations target staging only
+- **Smart Detection**: Automatically detects whether WooCommerce is installed.
+- **WooCommerce Filtering (HPOS)**: Copies staging database with **filtered order data** — only the N orders you specify, not the entire order history.
+- **Customer Anonymization**: Optionally masks billing/shipping addresses, customer names, emails, and phone numbers in the staging environment.
+- **Non-customer preservation**: Keeps all admins, editors, and shop manager accounts fully intact.
+- **Full WordPress Sync**: Works seamlessly with clean, non-WooCommerce WordPress instances as a fast, full sync tool.
+- **File Sync**: Syncs `wp-content/` via rsync with customizable folder exclusion.
+- **Domain Mapping**: Runs search-replace for domain URLs and handles Elementor / Jetpack URL settings automatically.
+- **Production Guardrails**: **Never writes to production** — read-only access to the live database, all mutations target staging only.
 
 ## Requirements
 
@@ -17,7 +20,7 @@ A TUI (Terminal User Interface) tool to synchronize a live WordPress/WooCommerce
   - MySQL/MariaDB
   - rsync
   - WP-CLI
-  - Apache2 (optional, used for auto-discovery)
+  - Apache2 / Nginx (optional, used for auto-discovery)
 
 ## Install
 
@@ -43,11 +46,12 @@ wp-stage-sync
 
 Walks you through:
 
-1. **Path selection** — auto-discovers WordPress installs from Apache2 vhost configs and filesystem
+1. **Path selection** — auto-discovers WordPress installs from web server vhosts and filesystem
 2. **Credential extraction** — parses `wp-config.php` automatically
-3. **Order count & preference** — how many orders to copy (Last N or First N)
+3. **WooCommerce Sync Options** — (If WooCommerce is present) select order count, preference, and choose whether to anonymize customer profiles
 4. **Table selector** — choose sync mode per table (Structure & Data / Structure Only / Ignore / Custom Rule)
-5. **Confirm & sync**
+5. **Rsync Exclude selector** — interactively toggle which `wp-content/` folders to exclude from file sync
+6. **Confirm & sync**
 
 Settings are saved to `~/.config/wp-stage-sync/sites/` for reuse.
 

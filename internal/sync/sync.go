@@ -202,3 +202,81 @@ func listTables(db *sql.DB) ([]string, error) {
 	}
 	return tables, rows.Err()
 }
+
+// Anonymize masks personal customer details in the staging database.
+func Anonymize(db *sql.DB, prefix string, log progress.Logger) error {
+	log.Detail("Anonymizing users and usermeta")
+
+	// 1. Update customer users in users table
+	usersQuery := fmt.Sprintf(`
+		UPDATE %susers u
+		INNER JOIN %susermeta um ON u.ID = um.user_id AND um.meta_key = '%scapabilities'
+		SET 
+			u.user_email = CONCAT('customer_', u.ID, '@example.com'), 
+			u.user_login = CONCAT('customer_', u.ID),
+			u.user_nicename = CONCAT('customer_', u.ID),
+			u.display_name = CONCAT('Customer ', u.ID)
+		WHERE um.meta_value LIKE '%%"customer"%%'
+	`, prefix, prefix, prefix)
+
+	if _, err := db.Exec(usersQuery); err != nil {
+		return fmt.Errorf("anonymizing users: %w", err)
+	}
+
+	// 2. Update customer usermeta billing/shipping
+	metaQuery := fmt.Sprintf(`
+		UPDATE %susermeta um
+		INNER JOIN %susermeta uc ON um.user_id = uc.user_id AND uc.meta_key = '%scapabilities'
+		SET um.meta_value = CASE 
+			WHEN um.meta_key IN ('first_name', 'billing_first_name', 'shipping_first_name') THEN 'Customer'
+			WHEN um.meta_key IN ('last_name', 'billing_last_name', 'shipping_last_name') THEN CONCAT('LN_', um.user_id)
+			WHEN um.meta_key = 'billing_email' THEN CONCAT('customer_', um.user_id, '@example.com')
+			WHEN um.meta_key = 'billing_phone' THEN '555-0000'
+			WHEN um.meta_key IN ('billing_address_1', 'shipping_address_1') THEN '123 Staging Lane'
+			WHEN um.meta_key IN ('billing_address_2', 'shipping_address_2') THEN ''
+			WHEN um.meta_key IN ('billing_city', 'shipping_city') THEN 'Staging City'
+			WHEN um.meta_key IN ('billing_postcode', 'shipping_postcode') THEN '12345'
+			ELSE um.meta_value
+		END
+		WHERE uc.meta_value LIKE '%%"customer"%%'
+		AND um.meta_key IN (
+			'first_name', 'billing_first_name', 'shipping_first_name',
+			'last_name', 'billing_last_name', 'shipping_last_name',
+			'billing_email', 'billing_phone',
+			'billing_address_1', 'shipping_address_1',
+			'billing_address_2', 'shipping_address_2',
+			'billing_city', 'shipping_city',
+			'billing_postcode', 'shipping_postcode'
+		)
+	`, prefix, prefix, prefix)
+
+	if _, err := db.Exec(metaQuery); err != nil {
+		return fmt.Errorf("anonymizing usermeta: %w", err)
+	}
+
+	// 3. Update WooCommerce order addresses (HPOS) if table exists
+	addressTable := prefix + "wc_order_addresses"
+	var count int
+	err := db.QueryRow("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?", addressTable).Scan(&count)
+	if err == nil && count > 0 {
+		log.Detail("Anonymizing order addresses")
+		addressQuery := fmt.Sprintf(`
+			UPDATE %swc_order_addresses
+			SET 
+				first_name = 'Customer',
+				last_name = CONCAT('LN_', order_id),
+				company = '',
+				address_1 = '123 Staging Lane',
+				address_2 = '',
+				city = 'Staging City',
+				postcode = '12345',
+				email = CONCAT('order_', order_id, '@example.com'),
+				phone = '555-0000'
+		`, prefix)
+		if _, err := db.Exec(addressQuery); err != nil {
+			return fmt.Errorf("anonymizing order addresses: %w", err)
+		}
+	}
+
+	return nil
+}
