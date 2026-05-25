@@ -72,6 +72,7 @@ type model struct {
 	progressCurrent int
 	progressTotal   int
 	spinnerFrame    int
+	currentVersion  string
 	updateAvailable string // latest version, empty if up to date
 }
 
@@ -96,8 +97,9 @@ var activeProgram *tea.Program
 var syncStartedAt time.Time
 var syncCompletedAt time.Time
 
-func Run(latestVersion string) error {
+func Run(currentVersion, latestVersion string) error {
 	m := initialModel()
+	m.currentVersion = currentVersion
 	m.updateAvailable = latestVersion
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	activeProgram = p
@@ -192,9 +194,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Global quit
-		if msg.Type == tea.KeyCtrlC {
+		if msg.Type == tea.KeyCtrlC || msg.String() == "q" {
 			return m, tea.Quit
+		}
+
+		if msg.String() == "h" && m.step != stepRunning {
+			m.err = fmt.Errorf("help (will implement soon)")
+			return m, nil
+		}
+
+		if msg.Type == tea.KeyEsc && m.step != stepRunning && m.step != stepDone {
+			m.err = nil
+			m = m.goBack()
+			return m, nil
 		}
 
 		m.err = nil
@@ -215,7 +227,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case stepConfirm:
 			return m.updateConfirm(msg)
 		case stepDone:
-			if msg.Type == tea.KeyEnter || msg.String() == "q" {
+			if msg.Type == tea.KeyEnter {
 				return m, tea.Quit
 			}
 		}
@@ -336,7 +348,7 @@ func (m model) View() string {
 				}
 				b.WriteString(style.Render(prefix+m.dirItems[i]) + "\n")
 			}
-			b.WriteString("\n" + dimStyle.Render("↑/↓ navigate | Enter open folder | Space select current folder | Esc go back"))
+			b.WriteString("\n" + dimStyle.Render("↑/↓ navigate | Enter open folder | Backspace go back to parent folder | Space select current folder | Esc go back to previous screen"))
 		}
 
 	case stepCredentials:
@@ -530,6 +542,22 @@ func (m model) View() string {
 		b.WriteString("\n" + updateStyle.Render(fmt.Sprintf("Update available: v%s → run 'wp-stage-sync --update'", m.updateAvailable)))
 	}
 
+	// Global beautiful footer
+	leftText := " q quit | esc back | h help"
+	rightText := fmt.Sprintf("wp-stage-sync v%s", m.currentVersion)
+	if m.updateAvailable != "" {
+		rightText = fmt.Sprintf("wp-stage-sync v%s (update available: v%s)", m.currentVersion, m.updateAvailable)
+	}
+
+	// Calculate space in between
+	padding := m.width - lipgloss.Width(leftText) - lipgloss.Width(rightText)
+	if padding < 2 {
+		padding = 2
+	}
+
+	footerLine := "\n\n" + dimStyle.Render(leftText + strings.Repeat(" ", padding) + rightText)
+	b.WriteString(footerLine)
+
 	return b.String()
 }
 
@@ -654,6 +682,9 @@ func (m model) updatePathsManual(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.curDir = filepath.Join(m.curDir, item)
 		}
+		m = m.readSubdirs()
+	case tea.KeyBackspace:
+		m.curDir = filepath.Dir(m.curDir)
 		m = m.readSubdirs()
 	default:
 		if msg.String() == " " {
@@ -897,10 +928,6 @@ func buildExcludeList(cfg *config.Config) ([]string, map[string]bool) {
 func (m model) updateExcludes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	last := len(m.excludeItems) - 1
 	switch msg.Type {
-	case tea.KeyEscape:
-		m.step = stepTableSelect
-		m.cursor = 0
-		return m, nil
 	case tea.KeyUp:
 		if m.cursor > 0 {
 			m.cursor--
@@ -943,10 +970,6 @@ func (m model) updateExcludes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
-	case tea.KeyEscape:
-		m.step = stepExcludes
-		m.cursor = 0
-		return m, nil
 	case tea.KeyEnter:
 		m.step = stepRunning
 		m.status = "Starting..."
@@ -1124,4 +1147,59 @@ func tickSpinner() tea.Cmd {
 	return tea.Tick(80*time.Millisecond, func(_ time.Time) tea.Msg {
 		return spinTickMsg{}
 	})
+}
+
+func (m model) goBack() model {
+	switch m.step {
+	case stepPaths:
+		if m.pathMode == pathModeManual {
+			if m.cursor == 1 {
+				m.cursor = 0
+				if m.cfg.LivePath != "" {
+					m.curDir = filepath.Dir(m.cfg.LivePath)
+					m = m.readSubdirs()
+				}
+			} else if len(m.sitePairs) > 0 {
+				m.pathMode = pathModePairs
+				m.cursor = 0
+			} else if len(m.savedSites) > 0 {
+				m.step = stepStartup
+				m.cursor = 0
+			}
+		} else if len(m.savedSites) > 0 {
+			m.step = stepStartup
+			m.cursor = 0
+		}
+	case stepCredentials:
+		m.step = stepPaths
+		m.cursor = 0
+		m = m.readSubdirs()
+	case stepSyncParams:
+		m.step = stepCredentials
+		m.cursor = 0
+	case stepTableSelect:
+		// Check if WooCommerce was detected
+		hasWoo := false
+		for _, t := range m.allTables {
+			if t == m.liveWP.TablePrefix+"wc_orders" || t == m.liveWP.TablePrefix+"woocommerce_order_items" {
+				hasWoo = true
+				break
+			}
+		}
+		if hasWoo {
+			m.step = stepSyncParams
+			m.cursor = 0
+			m.input = fmt.Sprintf("%d", m.cfg.OrderCount)
+		} else {
+			m.step = stepCredentials
+			m.cursor = 0
+		}
+	case stepExcludes:
+		m.step = stepTableSelect
+		m.cursor = 0
+	case stepConfirm:
+		m.step = stepExcludes
+		m.cursor = 0
+	}
+	return m
 }

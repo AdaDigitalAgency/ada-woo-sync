@@ -56,7 +56,7 @@ func main() {
 		return
 	}
 
-	if err := tui.Run(latestVersion); err != nil {
+	if err := tui.Run(version, latestVersion); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
