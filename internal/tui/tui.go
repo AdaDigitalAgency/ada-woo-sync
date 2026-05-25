@@ -657,7 +657,15 @@ func (m model) updatePathsManual(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m = m.readSubdirs()
 	default:
 		if msg.String() == " " {
+			if len(m.dirItems) == 0 {
+				break
+			}
 			path := m.curDir
+			item := m.dirItems[m.dirCursor]
+			if item != ".." {
+				path = filepath.Join(m.curDir, item)
+			}
+
 			if m.cursor == 0 {
 				m.cfg.LivePath = path
 				m.cursor = 1
