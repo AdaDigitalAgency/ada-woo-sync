@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/AdaDigitalAgency/wp-stage-sync/internal/config"
 	"github.com/AdaDigitalAgency/wp-stage-sync/internal/export"
 	"github.com/AdaDigitalAgency/wp-stage-sync/internal/progress"
 	"github.com/AdaDigitalAgency/wp-stage-sync/internal/wpcli"
@@ -149,7 +150,7 @@ func PostProcess(stagePath, liveDomain, stageDomain string, log progress.Logger)
 			!hasJetpack},
 		{"Cache flush",
 			wpArgs("cache", "flush", "--allow-root", "--path="+stagePath),
-			false},
+			!config.LoadSettings().AutoCacheFlush},
 	}
 
 	for i, c := range commands {
