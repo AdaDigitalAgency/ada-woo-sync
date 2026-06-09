@@ -249,6 +249,86 @@
 			text-align: left;
 		}
 
+		.trust-note {
+			max-width: 600px;
+			margin: -16px auto 36px;
+			text-align: left;
+		}
+
+		.trust-note-text {
+			font-size: 13px;
+			line-height: 1.65;
+			color: var(--text-secondary);
+			margin: 0 0 12px;
+		}
+
+		.trust-note-text strong {
+			color: var(--text);
+			font-weight: 600;
+		}
+
+		.trust-prompt {
+			display: flex;
+			align-items: stretch;
+			gap: 0;
+			background: var(--bg-subtle);
+			border: 1px solid var(--border);
+			border-radius: var(--radius-sm);
+			overflow: hidden;
+		}
+
+		.trust-prompt-text {
+			flex: 1;
+			padding: 12px 14px;
+			font-family: 'JetBrains Mono', monospace;
+			font-size: 12px;
+			line-height: 1.6;
+			color: var(--text-secondary);
+			white-space: normal;
+			word-break: break-word;
+		}
+
+		.trust-copy {
+			flex-shrink: 0;
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			padding: 0 14px;
+			background: transparent;
+			border: none;
+			border-left: 1px solid var(--border);
+			cursor: pointer;
+			color: var(--text-muted);
+			font-size: 12px;
+			font-family: 'Plus Jakarta Sans', sans-serif;
+			font-weight: 500;
+			transition: color 0.15s, background 0.15s;
+			white-space: nowrap;
+		}
+
+		.trust-copy:hover {
+			color: var(--blue);
+			background: var(--blue-pale);
+		}
+
+		.trust-copy svg {
+			width: 14px;
+			height: 14px;
+		}
+
+		@media (max-width: 560px) {
+			.trust-prompt {
+				flex-direction: column;
+			}
+
+			.trust-copy {
+				border-left: none;
+				border-top: 1px solid var(--border);
+				padding: 10px;
+				justify-content: center;
+			}
+		}
+
 		.install-label {
 			padding: 14px 16px;
 			font-family: 'JetBrains Mono', monospace;
@@ -1066,7 +1146,8 @@
 				Open Source · MIT License
 			</div>
 			<h1>Live-to-staging sync,<br><span>as easy as it should be.</span></h1>
-			<p class="hero-sub">Sync live WordPress to staging with smart WooCommerce filtering and anonymization. Promote specific themes and plugins from staging to live with automated backup and atomic restore.</p>
+			<p class="hero-sub">Sync live WordPress to staging with smart WooCommerce filtering and anonymization.
+				Promote specific themes and plugins from staging to live with automated backup and atomic restore.</p>
 			<div class="install-block">
 				<span class="install-label">$ bash</span>
 				<span class="install-cmd" id="heroCmd">curl -sSL https://ada.tools/wp-stage-sync/install.sh |
@@ -1077,6 +1158,26 @@
 						<path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
 					</svg>
 				</button>
+			</div>
+			<div class="trust-note">
+				<p class="trust-note-text">
+					<strong>Hey stranger.</strong> Don't trust anyone, and don't run random commands from the internet.
+					Want to see what's inside the install script first?
+					<a href="https://ada.tools/wp-stage-sync/install.sh" target="_blank" rel="noopener">Download it</a>
+					and read it yourself. Or hand this prompt to your favorite AI agent and let it do the reading:
+				</p>
+				<div class="trust-prompt">
+					<code class="trust-prompt-text"
+						id="trustPrompt">Fetch https://ada.tools/wp-stage-sync/install.sh and review it line by line. Start your answer with a "TL;DR" section: one line stating whether it's SAFE or NOT SAFE to run, in plain language a non-technical person can understand. Then add a detailed breakdown for those who want it: explain every command, flag anything unexpected, dangerous, or outside the scope of installing a single binary, and call out anything that touches my filesystem or requires elevated privileges.</code>
+					<button class="trust-copy" id="trustCopy" title="Copy prompt">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+							stroke-linecap="round">
+							<rect x="9" y="9" width="13" height="13" rx="2" />
+							<path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+						</svg>
+						<span>Copy prompt</span>
+					</button>
+				</div>
 			</div>
 			<div class="hero-ctas">
 				<a href="https://github.com/AdaDigitalAgency/wp-stage-sync" target="_blank" rel="noopener"
@@ -1513,7 +1614,10 @@
 					<p style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">Version & Help</p>
 					<code
 						style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--blue)">wp-stage-sync --help</code>
-					<p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Print available commands, flags, and usage examples. Use <code style="font-family:'JetBrains Mono',monospace;font-size:11px">--version</code> to check current binary version.
+					<p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Print available commands,
+						flags, and usage examples. Use <code
+							style="font-family:'JetBrains Mono',monospace;font-size:11px">--version</code> to check
+						current binary version.
 					</p>
 				</div>
 			</div>
@@ -1537,17 +1641,19 @@
 					<p style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">List sites</p>
 					<code
 						style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--blue)">wp-stage-sync -l</code>
-					<p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Show all configured sites with
+					<p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Show all configured sites
+						with
 						their live → staging mapping.</p>
 				</div>
 				<div style="flex: 1; min-width: 200px;">
 					<p style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">Target site</p>
 					<code
 						style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--blue)">-s example.com</code>
-					<p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Target a specific site. Supports
+					<p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Target a specific site.
+						Supports
 						multiple WP installs per server.</p>
 				</div>
-				</div>
+			</div>
 			<div
 				style="margin-top: 12px; padding: 20px 24px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
 				<div style="flex: 1; min-width: 200px;">
@@ -1561,18 +1667,20 @@
 					<p style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">Reset all</p>
 					<code
 						style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--blue)">wp-stage-sync --reset</code>
-					<p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Wipe all saved configs and start
+					<p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Wipe all saved configs and
+						start
 						fresh. Prompts before deleting.</p>
 				</div>
 			</div>
-			
+
 			<div
 				style="margin-top: 12px; padding: 20px 24px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
 				<div style="flex: 1; min-width: 200px;">
 					<p style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">Settings Screen</p>
 					<code
 						style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--blue)">Press 's' from TUI startup screen</code>
-					<p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Configure backup retention limits and automatic cache flushing. Persisted in settings.json.</p>
+					<p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Configure backup retention
+						limits and automatic cache flushing. Persisted in settings.json.</p>
 				</div>
 			</div>
 		</div>
@@ -1706,6 +1814,16 @@
 
 		document.getElementById('heroCopy').addEventListener('click', function () {
 			copyText(document.getElementById('heroCmd').textContent.trim(), this);
+		});
+
+		document.getElementById('trustCopy').addEventListener('click', function () {
+			const text = document.getElementById('trustPrompt').textContent.trim();
+			navigator.clipboard.writeText(text).then(() => {
+				const label = this.querySelector('span');
+				const orig = label.textContent;
+				label.textContent = 'Copied!';
+				setTimeout(() => { label.textContent = orig; }, 1800);
+			});
 		});
 
 		document.querySelectorAll('.code-copy').forEach(btn => {

@@ -50,17 +50,28 @@ fi
 
 chmod +x "$TMP"
 
-# Install (sudo if needed)
+# Install — root: system-wide, non-root with sudo: system-wide, otherwise: user-local
 print_step "Installing to ${INSTALL_DIR}/${BIN}..."
-if [[ -w "$INSTALL_DIR" ]]; then
+if [[ "$EUID" -eq 0 ]] || [[ -w "$INSTALL_DIR" ]]; then
   mv "$TMP" "${INSTALL_DIR}/${BIN}"
-else
+elif command -v sudo &>/dev/null && sudo -n true 2>/dev/null; then
   sudo mv "$TMP" "${INSTALL_DIR}/${BIN}"
+else
+  LOCAL_DIR="$HOME/.local/bin"
+  mkdir -p "$LOCAL_DIR"
+  mv "$TMP" "${LOCAL_DIR}/${BIN}"
+  INSTALL_DIR="$LOCAL_DIR"
+  printf '\033[1;33mWRN\033[0m Installed to %s (no root/sudo access).\n' "$LOCAL_DIR"
+  if [[ ":$PATH:" != *":$LOCAL_DIR:"* ]]; then
+    printf '\033[1;33mWRN\033[0m %s is not in your PATH.\n' "$LOCAL_DIR"
+    printf '    Add this to your ~/.bashrc or ~/.profile:\n'
+    printf '    export PATH="%s:$PATH"\n' "$LOCAL_DIR"
+  fi
 fi
 
 print_ok "${BIN} ${TAG} installed successfully."
 echo
-echo "  Run:  wp-stage-sync            (interactive TUI)"
-echo "  Run:  wp-stage-sync -u         (unattended / cron mode)"
-echo "  Run:  wp-stage-sync --update   (Self update)"
+echo "  Run:  wp-stage-sync        (interactive TUI)"
+echo "  Run:  wp-stage-sync -u     (unattended / cron mode)"
+echo "  Run:  wp-stage-sync --help"
 echo
