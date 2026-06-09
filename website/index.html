@@ -275,6 +275,7 @@
 			border: 1px solid var(--border);
 			border-radius: var(--radius-sm);
 			overflow: hidden;
+			flex-direction: column;
 		}
 
 		.trust-prompt-text {
@@ -293,10 +294,9 @@
 			display: flex;
 			align-items: center;
 			gap: 6px;
-			padding: 0 14px;
 			background: transparent;
 			border: none;
-			border-left: 1px solid var(--border);
+			border-top: 1px solid var(--border);
 			cursor: pointer;
 			color: var(--text-muted);
 			font-size: 12px;
@@ -304,6 +304,8 @@
 			font-weight: 500;
 			transition: color 0.15s, background 0.15s;
 			white-space: nowrap;
+			padding: 10px;
+			justify-content: center;
 		}
 
 		.trust-copy:hover {
@@ -314,19 +316,6 @@
 		.trust-copy svg {
 			width: 14px;
 			height: 14px;
-		}
-
-		@media (max-width: 560px) {
-			.trust-prompt {
-				flex-direction: column;
-			}
-
-			.trust-copy {
-				border-left: none;
-				border-top: 1px solid var(--border);
-				padding: 10px;
-				justify-content: center;
-			}
 		}
 
 		.install-label {
