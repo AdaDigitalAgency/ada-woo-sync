@@ -88,7 +88,24 @@ Browse previous backups and restore specific items to live. Press `r` on the sta
 wp-stage-sync -u
 ```
 
-Skips the TUI, reads saved config, and runs the sync immediately. Useful for cron jobs or scripts.
+Skips the TUI, reads saved config, and runs the sync immediately. Useful for cron jobs or scripts. If the site config has anonymization enabled, customer data is masked after import — same as the interactive flow.
+
+### Dry-run mode
+
+```bash
+wp-stage-sync -n            # or --dry-run
+wp-stage-sync -n -s example.com
+```
+
+Runs every discovery and planning step but **writes nothing** — no database mutations, no file changes, no WP-CLI commands. It prints a plan of what a real sync would do:
+
+- **Database export** — target order count, safe-user count, and every table grouped into filtered (with the filter rule + row count), full-data, schema-only, and ignored, plus the total rows that would be exported.
+- **Database import** — how many staging tables would be dropped and recreated.
+- **Anonymization** — whether customer data would be masked (per the site setting).
+- **File sync** — the rsync command plus a `rsync --dry-run --stats` transfer summary.
+- **Post-processing** — each WP-CLI command marked `[run]` or `[skip]` with the reason.
+
+Resolves config exactly like unattended mode, so `-s` / `--site` works the same way. Use it to preview a sync before running it for real.
 
 ### Multi-site targeting
 

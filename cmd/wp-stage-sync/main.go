@@ -32,6 +32,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -v, --version    Print version and exit\n")
 		fmt.Fprintf(os.Stderr, "  --update         Update to the latest version\n")
 		fmt.Fprintf(os.Stderr, "  -u, --unattended Run in unattended mode using saved config\n")
+		fmt.Fprintf(os.Stderr, "  -n, --dry-run    Plan the sync and print what would change, without writing\n")
 		fmt.Fprintf(os.Stderr, "  --promote        Enter promote mode (stage → live)\n")
 		fmt.Fprintf(os.Stderr, "  --restore        Enter restore mode\n")
 		fmt.Fprintf(os.Stderr, "  -s, --site <id>  Target a specific site by identifier\n")
@@ -42,6 +43,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  wp-stage-sync                        # Launch the TUI\n")
 		fmt.Fprintf(os.Stderr, "  wp-stage-sync -l                     # List all configured sites\n")
 		fmt.Fprintf(os.Stderr, "  wp-stage-sync -u -s my-site          # Sync 'my-site' unattended\n")
+		fmt.Fprintf(os.Stderr, "  wp-stage-sync -n -s my-site          # Preview the sync for 'my-site' (no changes)\n")
 		fmt.Fprintf(os.Stderr, "  wp-stage-sync --promote -s my-site   # Promote 'my-site' in unattended mode\n")
 		fmt.Fprintf(os.Stderr, "  wp-stage-sync --delete -s my-site    # Delete 'my-site' configuration\n")
 		fmt.Fprintf(os.Stderr, "  wp-stage-sync --reset                # Wipe all configurations\n")
@@ -49,6 +51,8 @@ func main() {
 
 	unattended := flag.Bool("u", false, "Run in unattended mode using saved config")
 	flag.BoolVar(unattended, "unattended", false, "Run in unattended mode using saved config")
+	dryRun := flag.Bool("dry-run", false, "Plan the sync without making any changes")
+	flag.BoolVar(dryRun, "n", false, "Plan the sync without making any changes")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.BoolVar(showVersion, "v", false, "Print version and exit")
 	doUpdate := flag.Bool("update", false, "Update to the latest version")
@@ -145,9 +149,21 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Restore mode does not support --site. Use the interactive TUI.\n")
 		os.Exit(1)
 	}
-	if *siteFlag != "" && !*unattended && !*promoteFlag {
-		fmt.Fprintf(os.Stderr, "The --site flag requires unattended mode (-u) or promote mode (--promote).\n")
+	if *dryRun && (*promoteFlag || *restoreFlag) {
+		fmt.Fprintf(os.Stderr, "Dry-run mode is only available for the default stage sync, not promote/restore.\n")
 		os.Exit(1)
+	}
+	if *siteFlag != "" && !*unattended && !*promoteFlag && !*dryRun {
+		fmt.Fprintf(os.Stderr, "The --site flag requires unattended mode (-u), dry-run mode (-n), or promote mode (--promote).\n")
+		os.Exit(1)
+	}
+
+	if *dryRun {
+		if err := runDryRun(*siteFlag); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	if *unattended {
@@ -283,6 +299,15 @@ func runUnattended(siteDomain string) error {
 	}
 	log.StepDone("Import complete")
 
+	// Step 1b: Anonymize customer data (if enabled for this site)
+	if cfg.Anonymize {
+		log.Step("Anonymizing customer data")
+		if err := sync.Anonymize(stageDB, liveWP.TablePrefix, log); err != nil {
+			return fmt.Errorf("anonymize: %w", err)
+		}
+		log.StepDone("Anonymization complete")
+	}
+
 	// Step 2: File sync
 	log.Step("Syncing files")
 	excludes := cfg.RsyncExcludes
@@ -306,6 +331,192 @@ func runUnattended(siteDomain string) error {
 	duration := time.Since(started).Truncate(time.Second)
 	log.StepDone(fmt.Sprintf("Sync completed at %s and it took %s", time.Now().Format("2006-01-02 15:04:05"), duration))
 	return nil
+}
+
+func runDryRun(siteDomain string) error {
+	log := progress.NewCLILogger()
+
+	cfg, err := resolveConfig(siteDomain)
+	if err != nil {
+		return err
+	}
+
+	liveDomain := discovery.ExtractDomain(cfg.LivePath)
+	stageDomain := discovery.ExtractDomain(cfg.StagePath)
+
+	fmt.Println("DRY RUN — no database, file, or WP-CLI changes will be made.")
+	fmt.Println()
+	fmt.Printf("Live:  %s (%s)\n", liveDomain, cfg.LivePath)
+	fmt.Printf("Stage: %s (%s)\n", stageDomain, cfg.StagePath)
+
+	log.Step("Parsing wp-config files")
+	liveWP, err := wpconfig.Parse(cfg.LivePath + "/wp-config.php")
+	if err != nil {
+		return fmt.Errorf("parsing live wp-config.php: %w", err)
+	}
+	stageWP, err := wpconfig.Parse(cfg.StagePath + "/wp-config.php")
+	if err != nil {
+		return fmt.Errorf("parsing stage wp-config.php: %w", err)
+	}
+	log.StepDone("Config parsed")
+
+	log.Step("Validating paths and databases")
+	if err := guardrail.ValidatePaths(cfg.LivePath, cfg.StagePath); err != nil {
+		return err
+	}
+	if err := guardrail.ValidateDBs(liveWP, stageWP); err != nil {
+		return err
+	}
+	log.StepDone("Validation passed")
+
+	log.Step("Connecting to databases")
+	liveDB, stageDB, err := db.Connect(liveWP, stageWP)
+	if err != nil {
+		return fmt.Errorf("database connection: %w", err)
+	}
+	defer liveDB.Close()
+	defer stageDB.Close()
+	log.StepDone("Connected")
+
+	// Plan the export (read-only — counts rows, dumps nothing).
+	log.Step("Planning export from live database")
+	plan, err := export.BuildPlan(liveDB, liveWP.TablePrefix, cfg, log)
+	if err != nil {
+		return fmt.Errorf("export plan: %w", err)
+	}
+	log.StepDone("Export planned")
+
+	// Determine which staging tables would be dropped before import.
+	stageTables, err := sync.ListStageTables(stageDB)
+	if err != nil {
+		return fmt.Errorf("listing staging tables: %w", err)
+	}
+
+	// Plan the file sync via rsync --dry-run.
+	log.Step("Planning file sync (rsync --dry-run)")
+	excludes := cfg.RsyncExcludes
+	if len(excludes) == 0 {
+		excludes = sync.DefaultExcludes
+	}
+	rsyncPlan, rsyncErr := sync.FileSyncPlan(cfg.LivePath, cfg.StagePath, excludes)
+	if rsyncErr != nil {
+		log.Detail(fmt.Sprintf("rsync preview unavailable: %v", rsyncErr))
+	}
+	log.StepDone("File sync planned")
+
+	ppPlan := sync.PostProcessPlan(cfg.StagePath, liveDomain, stageDomain)
+
+	printExportPlan(plan)
+	printImportPlan(stageTables, plan)
+	printAnonymizePlan(cfg.Anonymize)
+	printRsyncPlan(rsyncPlan, excludes, rsyncErr)
+	printPostProcessPlan(ppPlan)
+
+	fmt.Println()
+	fmt.Println("No changes were made. Re-run with -u (without -n) to execute the sync.")
+	return nil
+}
+
+func printExportPlan(p *export.Plan) {
+	fmt.Println()
+	fmt.Println("── Database export (from live) ───────────────────────────────")
+	fmt.Printf("Target orders:  %d (%s %d)\n", p.TargetOrders, p.OrderPreference, p.OrderCount)
+	fmt.Printf("Safe users:     %d\n", p.SafeUsers)
+	fmt.Printf("Tables in live: %d\n", p.TotalTables)
+
+	var filtered, full, schemaOnly, ignored []export.TablePlan
+	for _, t := range p.Tables {
+		switch {
+		case t.Mode == config.TableModeIgnore:
+			ignored = append(ignored, t)
+		case t.Mode == config.TableModeStructureOnly:
+			schemaOnly = append(schemaOnly, t)
+		case t.Filter != "":
+			filtered = append(filtered, t)
+		default:
+			full = append(full, t)
+		}
+	}
+
+	if len(filtered) > 0 {
+		fmt.Printf("\nFiltered tables (%d) — partial data by rule:\n", len(filtered))
+		for _, t := range filtered {
+			fmt.Printf("  %-40s %8d rows  [%s]\n", t.Name, t.Rows, t.Filter)
+		}
+	}
+	if len(full) > 0 {
+		fmt.Printf("\nFull-data tables (%d):\n", len(full))
+		for _, t := range full {
+			fmt.Printf("  %-40s %8d rows\n", t.Name, t.Rows)
+		}
+	}
+	if len(schemaOnly) > 0 {
+		fmt.Printf("\nSchema-only tables (%d) — structure, no rows:\n", len(schemaOnly))
+		for _, t := range schemaOnly {
+			fmt.Printf("  %s\n", t.Name)
+		}
+	}
+	if len(ignored) > 0 {
+		fmt.Printf("\nIgnored tables (%d) — not exported:\n", len(ignored))
+		for _, t := range ignored {
+			fmt.Printf("  %s\n", t.Name)
+		}
+	}
+	fmt.Printf("\nTotal rows that would be exported: %d\n", p.ExportedRows())
+}
+
+func printImportPlan(stageTables []string, p *export.Plan) {
+	fmt.Println()
+	fmt.Println("── Database import (into stage) ──────────────────────────────")
+	fmt.Printf("Would drop %d existing staging table(s), then recreate %d table(s) from the export.\n",
+		len(stageTables), len(p.Tables))
+}
+
+func printAnonymizePlan(anonymize bool) {
+	fmt.Println()
+	fmt.Println("── Anonymization ─────────────────────────────────────────────")
+	if anonymize {
+		fmt.Println("Enabled — customer users, usermeta, and order addresses would be masked after import.")
+	} else {
+		fmt.Println("Disabled — customer data would be imported as-is.")
+	}
+}
+
+func printRsyncPlan(plan *sync.RsyncPlan, excludes []string, rsyncErr error) {
+	fmt.Println()
+	fmt.Println("── File sync (rsync) ─────────────────────────────────────────")
+	if plan != nil {
+		fmt.Printf("Source: %s\n", plan.Source)
+		fmt.Printf("Dest:   %s\n", plan.Dest)
+	}
+	fmt.Printf("Excludes: %s\n", strings.Join(excludes, ", "))
+	if plan != nil {
+		fmt.Printf("Command: %s\n", plan.Command)
+	}
+	if rsyncErr != nil {
+		fmt.Printf("(rsync preview unavailable: %v)\n", rsyncErr)
+		return
+	}
+	if plan != nil && plan.Output != "" {
+		fmt.Println("\nrsync --dry-run stats:")
+		fmt.Println(plan.Output)
+	}
+}
+
+func printPostProcessPlan(plan *sync.PostProcessReport) {
+	fmt.Println()
+	fmt.Println("── Post-processing (WP-CLI) ──────────────────────────────────")
+	if !plan.WPAvailable {
+		fmt.Println("Note: wp-cli is not installed locally; it would be downloaded at run time.")
+	}
+	for _, c := range plan.Commands {
+		if c.Skip {
+			fmt.Printf("  [skip] %s (%s)\n", c.Label, c.SkipNote)
+			continue
+		}
+		fmt.Printf("  [run]  %s\n", c.Label)
+		fmt.Printf("         %s\n", strings.Join(c.Args, " "))
+	}
 }
 
 func confirm(prompt string) bool {

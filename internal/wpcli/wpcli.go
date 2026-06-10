@@ -36,6 +36,22 @@ func Resolve() ([]string, error) {
 	return []string{phpPath, pharPath}, nil
 }
 
+// ResolveExisting behaves like Resolve but never downloads the PHAR. It returns
+// the wp-cli command parts and ok=true when wp-cli is available locally, or
+// ok=false when it is not (so callers can plan without side effects).
+func ResolveExisting() ([]string, bool) {
+	if path, err := exec.LookPath("wp"); err == nil {
+		return []string{path}, true
+	}
+	pharPath := localPharPath()
+	if _, err := os.Stat(pharPath); err == nil {
+		if cmd, err := pharCmd(pharPath); err == nil {
+			return cmd, true
+		}
+	}
+	return nil, false
+}
+
 func localPharPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {

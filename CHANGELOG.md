@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-06-10
+
+### Added
+
+- **Dry-run mode** (`-n` / `--dry-run`): preview a sync without writing anything — prints what would be exported, dropped/recreated, transferred (`rsync --dry-run`), and which WP-CLI commands would run. Supports `-s` / `--site`.
+
+### Fixed
+
+- Anonymization now runs in unattended mode (`-u`); previously only the TUI applied it.
+- Post-processing skip messages now report the actual reason instead of always "plugin not installed".
+
 ## [0.5.0] - 2026-05-27
 
 ### Added

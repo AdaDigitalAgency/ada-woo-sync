@@ -114,12 +114,18 @@ func FileSync(livePath, stagePath string, excludes []string, log progress.Logger
 	return nil
 }
 
-// PostProcess executes Step 3: WP-CLI search-replace and cache flush.
-func PostProcess(stagePath, liveDomain, stageDomain string, log progress.Logger) error {
-	wpBase, err := wpcli.Resolve()
-	if err != nil {
-		return fmt.Errorf("wp-cli: %w", err)
-	}
+// PlannedCommand is a single WP-CLI command in the post-processing step.
+type PlannedCommand struct {
+	Label    string
+	Args     []string
+	Skip     bool
+	SkipNote string
+}
+
+// postProcessCommands builds the ordered WP-CLI command list (with skip
+// decisions) shared by PostProcess and PostProcessPlan. wpBase is the resolved
+// wp-cli invocation, e.g. ["wp"] or ["php", "/path/to/wp-cli.phar"].
+func postProcessCommands(wpBase []string, stagePath, liveDomain, stageDomain string) []PlannedCommand {
 	wpArgs := func(args ...string) []string {
 		cmd := make([]string, len(wpBase), len(wpBase)+len(args))
 		copy(cmd, wpBase)
@@ -129,40 +135,55 @@ func PostProcess(stagePath, liveDomain, stageDomain string, log progress.Logger)
 	hasElementor := dirExists(filepath.Join(stagePath, "wp-content", "plugins", "elementor"))
 	hasJetpack := dirExists(filepath.Join(stagePath, "wp-content", "plugins", "jetpack"))
 
-	commands := []struct {
-		label string
-		args  []string
-		skip  bool
-	}{
-		{fmt.Sprintf("Search-replace: %s → %s", liveDomain, stageDomain),
-			wpArgs("search-replace",
+	return []PlannedCommand{
+		{
+			Label: fmt.Sprintf("Search-replace: %s → %s", liveDomain, stageDomain),
+			Args: wpArgs("search-replace",
 				"https://"+liveDomain, "https://"+stageDomain,
 				"--all-tables", "--allow-root", "--path="+stagePath),
-			false},
-		{"Elementor URL replace",
-			wpArgs("elementor", "replace-urls",
+		},
+		{
+			Label: "Elementor URL replace",
+			Args: wpArgs("elementor", "replace-urls",
 				"https://"+liveDomain, "https://"+stageDomain,
 				"--allow-root", "--path="+stagePath),
-			!hasElementor},
-		{"Jetpack safe mode",
-			wpArgs("option", "update", "jetpack_safe_mode_confirmed", "1",
+			Skip:     !hasElementor,
+			SkipNote: "elementor plugin not installed",
+		},
+		{
+			Label: "Jetpack safe mode",
+			Args: wpArgs("option", "update", "jetpack_safe_mode_confirmed", "1",
 				"--allow-root", "--quiet", "--path="+stagePath),
-			!hasJetpack},
-		{"Cache flush",
-			wpArgs("cache", "flush", "--allow-root", "--path="+stagePath),
-			!config.LoadSettings().AutoCacheFlush},
+			Skip:     !hasJetpack,
+			SkipNote: "jetpack plugin not installed",
+		},
+		{
+			Label:    "Cache flush",
+			Args:     wpArgs("cache", "flush", "--allow-root", "--path="+stagePath),
+			Skip:     !config.LoadSettings().AutoCacheFlush,
+			SkipNote: "auto cache flush disabled in settings",
+		},
+	}
+}
+
+// PostProcess executes Step 3: WP-CLI search-replace and cache flush.
+func PostProcess(stagePath, liveDomain, stageDomain string, log progress.Logger) error {
+	wpBase, err := wpcli.Resolve()
+	if err != nil {
+		return fmt.Errorf("wp-cli: %w", err)
 	}
 
+	commands := postProcessCommands(wpBase, stagePath, liveDomain, stageDomain)
 	for i, c := range commands {
-		if c.skip {
-			log.Detail(fmt.Sprintf("Skipping: %s (plugin not installed)", c.label))
+		if c.Skip {
+			log.Detail(fmt.Sprintf("Skipping: %s (%s)", c.Label, c.SkipNote))
 			continue
 		}
-		log.Detail(c.label)
+		log.Detail(c.Label)
 		log.Progress(i, len(commands))
-		cmd := exec.Command(c.args[0], c.args[1:]...)
+		cmd := exec.Command(c.Args[0], c.Args[1:]...)
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("running %s: %w", strings.Join(c.args, " "), err)
+			return fmt.Errorf("running %s: %w", strings.Join(c.Args, " "), err)
 		}
 	}
 	log.Progress(len(commands), len(commands))
